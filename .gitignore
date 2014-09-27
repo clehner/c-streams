@@ -1,0 +1,8 @@
+*.o
+*.d
+*.68k
+*.gdb
+*.bin
+*.dsk
+StreamTest
+linkmap.txt
