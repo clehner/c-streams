@@ -45,28 +45,34 @@ void StreamClose(Stream *stream)
 }
 
 // write some data to the stream provider
+// Consumer should call this
 void StreamWrite(Stream *stream, char *data, short len)
 {
 	stream->provider->write(stream, stream->providerData, data, len);
 }
 
-// deliver new data from the stream to the provider, if it has data
-void StreamPoll(Stream *stream)
+// Provider should call these:
+
+// deliver new data from the provider to the consumer
+void StreamRead(Stream *stream, char *data, short len)
 {
-	char *data;
-	short len;
-	// get data from the provider
-	while (stream->provider->poll(stream, stream->providerData, &data, &len)) {
-		// deliver the result to the consumer
-		if (len < 0) {
-			// error
-			stream->consumer->on_error(stream->consumerData, len);
-		} else if (len == 0) {
-			// closed
-			stream->consumer->on_close(stream->consumerData);
-		} else {
-			// data
-			stream->consumer->on_data(stream->consumerData, data, len);
-		}
-	}
+	stream->consumer->on_data(stream->consumerData, data, len);
+}
+
+// there was an error receiving or sending data
+void StreamErrored(Stream *stream, short error)
+{
+	stream->consumer->on_error(stream->consumerData, error);
+}
+
+// the resource closed
+void StreamClosed(Stream *stream)
+{
+	stream->consumer->on_close(stream->consumerData);
+}
+
+// there is no more data to read
+void StreamEnded(Stream *stream)
+{
+	stream->consumer->on_end(stream->consumerData);
 }

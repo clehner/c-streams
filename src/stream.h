@@ -13,6 +13,7 @@ struct StreamConsumer {
 	void (*on_data)(void *consumerData, char *data, short len);
 	void (*on_error)(void *consumerData, short err);
 	void (*on_close)(void *consumerData);
+	void (*on_end)(void *consumerData);
 };
 
 // functions for writing and receiving from a stream
@@ -20,7 +21,6 @@ struct StreamProvider {
 	void (*open)(Stream *s, void *providerData);
 	void (*close)(Stream *s, void *providerData);
 	void (*write)(Stream *s, void *providerData, char *data, short len);
-	bool (*poll)(Stream *s, void *providerData, char **data, short *len);
 };
 
 Stream *NewStream();
@@ -29,6 +29,11 @@ void StreamProvide(Stream *s, StreamProvider *provider, void *providerData);
 void StreamOpen(Stream *stream);
 void StreamClose(Stream *stream);
 void StreamWrite(Stream *stream, char *data, short len);
-void StreamPoll(Stream *stream);
+
+// call by provider
+void StreamRead(Stream *stream, char *data, short len);
+void StreamErrored(Stream *stream, short error);
+void StreamClosed(Stream *stream);
+void StreamEnded(Stream *stream);
 
 #endif
