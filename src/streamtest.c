@@ -39,16 +39,11 @@ bool HandleEvent()
 	}
 }
 
-// handle IO operations. return false to quit, true to continue
-bool HandleIO()
-{
-	PollFileStreams();
-	return true;
-}
-
 int main()
 {
 	OpenAFile();
-	while (HandleEvent() && HandleIO());
+	while (HandleEvent()) {
+		PollStreams();
+	}
 	return 0;
 }

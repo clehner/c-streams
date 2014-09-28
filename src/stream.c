@@ -6,15 +6,21 @@
 struct Stream {
 	StreamConsumer *consumer;
 	void *consumerData;
-
 	StreamProvider *provider;
 	void *providerData;
+	struct Stream *nextReady;
+	bool isReady;
 };
+
+Stream *readyStreamsHead = NULL;
+Stream *readyStreamsTail = NULL;
 
 // create a new stream object
 Stream *NewStream()
 {
 	Stream *s = malloc(sizeof(Stream));
+	s->nextReady = NULL;
+	s->isReady = false;
 	return s;
 }
 
@@ -75,4 +81,35 @@ void StreamClosed(Stream *stream)
 void StreamEnded(Stream *stream)
 {
 	stream->consumer->on_end(stream->consumerData);
+}
+
+// Queue a stream for polling in the event loop.
+// May be called in interrupt.
+void StreamWait(Stream *stream)
+{
+	if (stream->isReady) {
+		// only add to the queue once
+		return;
+	}
+	stream->isReady = true;
+	if (readyStreamsTail) {
+		readyStreamsTail->nextReady = stream;
+	} else {
+		readyStreamsHead = stream;
+	}
+	readyStreamsTail = stream;
+}
+
+void PollStreams()
+{
+	Stream *stream, *next;
+	// Handle each ready operation
+	for (stream = readyStreamsHead; stream; stream = next) {
+		// tell the stream to handle its completed operations
+		stream->provider->poll(stream, stream->providerData);
+		stream->isReady = false;
+		next = stream->nextReady;
+	}
+	readyStreamsHead = NULL;
+	readyStreamsTail = NULL;
 }

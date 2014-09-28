@@ -13,6 +13,8 @@ typedef struct {
 	short refNum;
 	char readBuf[256];
 	Stream *stream;
+	MyParamBlock *completedPBsHead;
+	MyParamBlock *completedPBsTail;
 } FileData;
 
 struct MyParamBlock {
@@ -23,17 +25,16 @@ struct MyParamBlock {
 void FileStreamOpen(Stream *s, void *providerData);
 void FileStreamClose(Stream *s, void *providerData);
 void FileStreamWrite(Stream *s, void *providerData, char *data, short len);
+void FileStreamPoll(Stream *s, void *providerData);
 void FileStreamRead(FileData *fileData, MyParamBlock *pb);
 void FileStreamComplete(MyParamBlock *pb);
-void FileStreamCompleted(MyParamBlock *pb);
-
-MyParamBlock *completedPBsHead = NULL;
-MyParamBlock *completedPBsTail = NULL;
+void FileStreamCompleted(Stream *s, MyParamBlock *pb);
 
 static StreamProvider fileStreamProvider = {
 	.open = FileStreamOpen,
 	.close = FileStreamClose,
 	.write = FileStreamWrite,
+	.poll = FileStreamPoll,
 };
 
 MyParamBlock *NewPB(FileData *fileData)
@@ -57,6 +58,8 @@ void ProvideFileStream(Stream *s, char *fileName, short vRefNum)
 	fileData->fileName = fileName;
 	fileData->vRefNum = vRefNum;
 	fileData->stream = s;
+	fileData->completedPBsTail = NULL;
+	fileData->completedPBsHead = NULL;
 	StreamProvide(s, &fileStreamProvider, fileData);
 }
 
@@ -127,11 +130,10 @@ void FileStreamRead(FileData *fileData, MyParamBlock *pb)
 	PBReadAsync((ParmBlkPtr)pb);
 }
 
-// handle completed IO operation, in main thread
-void FileStreamCompleted(MyParamBlock *pb)
+// handle completed IO operation, not in interrupt
+void FileStreamCompleted(Stream *s, MyParamBlock *pb)
 {
 	FileData *fileData = pb->fileData;
-	Stream *s = fileData->stream;
 	OSErr oe = pb->ioParam.ioResult;
 	unsigned short trap = pb->ioParam.ioTrap;
 
@@ -199,24 +201,29 @@ void FileStreamComplete(MyParamBlock *pb)
 {
 	FileData *fileData = pb->fileData;
 	// Put the PB on our queue of completed operations.
-	// Then we can retrieve it in PollFileStreams.
+	// Then we can retrieve it in FileStreamPoll.
 	// Make use of the linked-list pointer which is not used after completion.
-	if (completedPBsTail) {
-		((IOParamPtr)completedPBsTail)->qLink = (QElemPtr)pb;
+	if (fileData->completedPBsTail) {
+		fileData->completedPBsTail->ioParam.qLink = (QElemPtr)pb;
 	} else {
-		completedPBsHead = pb;
+		fileData->completedPBsHead = pb;
 	}
-	completedPBsTail = pb;
+	fileData->completedPBsTail = pb;
+
+	// notify the stream manager that we have data to poll for
+	StreamWait(pb->fileData->stream);
 }
 
-void PollFileStreams()
+// called by stream manager to tell us to handle completed operations
+void FileStreamPoll(Stream *stream, void *providerData)
 {
+	FileData *fileData = (FileData *)providerData;
 	MyParamBlock *pb, *pbNext;
 	// Handle each completed operation
-	for (pb = completedPBsHead; pb; pb = pbNext) {
-		FileStreamCompleted(pb);
+	for (pb = fileData->completedPBsHead; pb; pb = pbNext) {
+		FileStreamCompleted(stream, pb);
 		pbNext = (MyParamBlock *)pb->ioParam.qLink;
 	}
-	completedPBsHead = NULL;
-	completedPBsTail = NULL;
+	fileData->completedPBsHead = NULL;
+	fileData->completedPBsTail = NULL;
 }

@@ -21,7 +21,10 @@ struct StreamProvider {
 	void (*open)(Stream *s, void *providerData);
 	void (*close)(Stream *s, void *providerData);
 	void (*write)(Stream *s, void *providerData, char *data, short len);
+	void (*poll)(Stream *s, void *providerData);
 };
+
+void PollStreams();
 
 Stream *NewStream();
 void StreamConsume(Stream *s, StreamConsumer *consumer, void *consumerData);
@@ -35,5 +38,6 @@ void StreamRead(Stream *stream, char *data, short len);
 void StreamErrored(Stream *stream, short error);
 void StreamClosed(Stream *stream);
 void StreamEnded(Stream *stream);
+void StreamWait(Stream *stream);
 
 #endif
