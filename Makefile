@@ -9,7 +9,7 @@ INC     = $(wildcard src/*.h)
 OBJ     = $(SRC:.c=.o)
 DEP     = $(SRC:.c=.d)
 CFLAGS  = -O3 -DNDEBUG
-CFLAGS += -Wno-multichar -Wno-attributes
+CFLAGS += -Wno-multichar
 CFLAGS += -MMD -I$(TOOLCHAIN)/$(ARCH)/include
 LDFLAGS = $(TOOLCHAIN)/../build-target/Console/libRetroConsole.a -lretrocrt
 LDFLAGS+= -O3 -DNDEBUG -Wl,-elf2flt -Wl,-q -Wl,-Map=linkmap.txt -Wl,-undefined=consolewrite

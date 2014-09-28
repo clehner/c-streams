@@ -24,7 +24,7 @@ void FileStreamOpen(Stream *s, void *providerData);
 void FileStreamClose(Stream *s, void *providerData);
 void FileStreamWrite(Stream *s, void *providerData, char *data, short len);
 void FileStreamRead(FileData *fileData);
-void FileStreamComplete();
+void FileStreamComplete(MyParamBlock *pb);
 void FileStreamCompleted(MyParamBlock *pb);
 
 MyParamBlock *completedPBsHead = NULL;
@@ -190,9 +190,9 @@ void FileStreamCompleted(MyParamBlock *pb)
 
 // Asynchronous IO completion function.
 // May be executed in interrupt.
-void FileStreamComplete()
+#pragma parameter FileStreamComplete(__A0)
+void FileStreamComplete(MyParamBlock *pb)
 {
-	register MyParamBlock *pb __asm__ ("a0");
 	FileData *fileData = pb->fileData;
 	// Put the PB on our queue of completed operations.
 	// Then we can retrieve it in PollFileStreams.
