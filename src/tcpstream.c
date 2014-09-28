@@ -126,6 +126,8 @@ TCPData *NewTCPData(Stream *s)
 	if (pb->ioResult != noErr) {
 		StreamErrored(s, -99);
 		StreamErrored(s, pb->ioResult);
+	} else {
+		printf("created tcp stream\n");
 	}
 	return tcpData;
 }
@@ -151,8 +153,14 @@ void TCPStreamOpen(Stream *s, void *providerData)
 	openPb->remotePort = tcpData->remotePort;
 	openPb->userDataPtr = providerData;
 
+	printf("port: %hu. stream: %p\n", openPb->remotePort, pb->tcpStream);
+	puts("press enter\n");
+	getchar();
+
 	PBControlAsync((ParmBlkPtr)pb);
-	printf("open done. result: %d\n", pb->ioResult);
+	puts("press enter\n");
+	printf("open done. result: %hd\n", pb->ioResult);
+	// TODO: check for completion here in case it was synchronous
 }
 
 void TCPStreamClose(Stream *s, void *providerData)
@@ -177,9 +185,17 @@ void TCPStreamPoll(Stream *stream, void *providerData)
 }
 
 // handle completed IO operation, not in interrupt
-void TCPStreamCompleted(Stream *s, MyTCPiopb *pb)
+void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 {
-	printf("tcp something completed\n");
+	switch (pb->pb.csCode) {
+		case TCPActiveOpen:
+			printf("opened from port %hu\n", pb->pb.csParam.open.localPort);
+			StreamOpened(stream);
+			free(pb);
+			break;
+		default:
+			printf("unhandled TCP operation completed\n");
+	}
 }
 
 // asynchronous notification routine
@@ -200,18 +216,23 @@ pascal void TCPNotifyProc(
 {
 	switch (eventCode) {
 		case TCPClosing:
+			printf("tcp stream closing\n");
 		break;
 		case TCPULPTimeout:
+			printf("tcp timeout\n");
 		break;
 		case TCPTerminate:
+			printf("tcp stream terminated\n");
 		break;
 		case TCPDataArrival:
+			printf("tcp data arrival\n");
 		break;
 		case TCPUrgent:
 		break;
 		case TCPICMPReceived:
 		break;
 		default:
+			printf("unhandled tcp notification\n");
 		break;
 	}
 }

@@ -23,7 +23,7 @@ void StdoutConsumeStream(Stream *stream)
 
 void StdoutConsumeOpen(void *consumerData)
 {
-	// stdout is already open
+	printf("the stream is open!\n");
 }
 
 void StdoutConsumeData(void *consumerData, char *data, short len)
@@ -41,9 +41,10 @@ void StdoutConsumeError(void *consumerData, short err)
 
 void StdoutConsumeClose(void *consumerData)
 {
-	// don't need to close stdout
+	printf("the stream closed.\n");
 }
 
 void StdoutConsumeEnd(void *consumerData)
 {
+	printf("the stream ended.\n");
 }

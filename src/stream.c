@@ -71,6 +71,11 @@ void StreamErrored(Stream *stream, short error)
 	stream->consumer->on_error(stream->consumerData, error);
 }
 
+void StreamOpened(Stream *stream)
+{
+	stream->consumer->on_open(stream->consumerData);
+}
+
 // the resource closed
 void StreamClosed(Stream *stream)
 {

@@ -36,6 +36,7 @@ void StreamWrite(Stream *stream, char *data, short len);
 // call by provider
 void StreamRead(Stream *stream, char *data, short len);
 void StreamErrored(Stream *stream, short error);
+void StreamOpened(Stream *stream);
 void StreamClosed(Stream *stream);
 void StreamEnded(Stream *stream);
 void StreamWait(Stream *stream);

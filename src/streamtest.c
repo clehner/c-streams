@@ -7,7 +7,8 @@
 #include "tcpstream.h"
 #include "stdoutconsume.h"
 
-char *fileName = "\pLauncher:page.html";
+char *fileName = "\pMacintosh HD:asdf.txt";
+//ip_addr host = IP_ADDR(127,0,0,1);
 ip_addr host = IP_ADDR(192,168,0,5);
 tcp_port port = 9999;
 
@@ -56,7 +57,8 @@ bool HandleEvent()
 
 int main()
 {
-	OpenAFile();
+	printf("Press 's' to open a socket, 'o' to open a file\n");
+	//OpenASocket();
 	while (HandleEvent()) {
 		PollStreams();
 	}
