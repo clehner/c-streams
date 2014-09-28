@@ -36,7 +36,7 @@ void StdoutConsumeData(void *consumerData, char *data, short len)
 void StdoutConsumeError(void *consumerData, short err)
 {
 	// write error to stderr
-	fprintf(stderr, "There was an error: %hu", err);
+	fprintf(stderr, "There was an error: %hd\n", err);
 }
 
 void StdoutConsumeClose(void *consumerData)

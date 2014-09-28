@@ -52,7 +52,7 @@ void ProvideFileStream(Stream *s, char *fileName, short vRefNum)
 	if (!s) return;
 	FileData *fileData = malloc(sizeof(FileData));
 	if (!fileData) {
-		free(s);
+		// TODO: error
 		return;
 	}
 	fileData->fileName = fileName;

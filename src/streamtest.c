@@ -4,9 +4,12 @@
 #include <stdbool.h>
 #include "stream.h"
 #include "filestream.h"
+#include "tcpstream.h"
 #include "stdoutconsume.h"
 
 char *fileName = "\pLauncher:page.html";
+ip_addr host = IP_ADDR(192,168,0,5);
+tcp_port port = 9999;
 
 void OpenAFile()
 {
@@ -15,6 +18,16 @@ void OpenAFile()
 	Stream *stream = NewStream();
 	StdoutConsumeStream(stream);
 	ProvideFileStream(stream, fileName, 0);
+	StreamOpen(stream);
+}
+
+void OpenASocket()
+{
+	printf("Opening tcp socket %s:%hu\n", sprint_ip_addr(host), port);
+
+	Stream *stream = NewStream();
+	StdoutConsumeStream(stream);
+	ProvideTCPActiveStream(stream, host, port);
 	StreamOpen(stream);
 }
 
@@ -29,6 +42,8 @@ bool HandleEvent()
 			char key = e.message & charCodeMask;
 			if (key == 'q' && e.modifiers & cmdKey) {
 				return false;
+			} else if (key == 's') {
+				OpenASocket();
 			} else if (key == 'o') {
 				OpenAFile();
 			} else if (key != '\r' && key != '\03') {
