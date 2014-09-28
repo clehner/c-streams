@@ -23,7 +23,7 @@ struct MyParamBlock {
 void FileStreamOpen(Stream *s, void *providerData);
 void FileStreamClose(Stream *s, void *providerData);
 void FileStreamWrite(Stream *s, void *providerData, char *data, short len);
-void FileStreamRead(FileData *fileData);
+void FileStreamRead(FileData *fileData, MyParamBlock *pb);
 void FileStreamComplete(MyParamBlock *pb);
 void FileStreamCompleted(MyParamBlock *pb);
 
@@ -36,13 +36,13 @@ static StreamProvider fileStreamProvider = {
 	.write = FileStreamWrite,
 };
 
-ParmBlkPtr NewPB(FileData *fileData)
+MyParamBlock *NewPB(FileData *fileData)
 {
 	MyParamBlock *pb = malloc(sizeof(MyParamBlock));
 	if (!pb) return NULL;
 	pb->fileData = fileData;
 	pb->ioParam.ioCompletion = FileStreamComplete;
-	return (ParmBlkPtr)pb;
+	return pb;
 }
 
 // provide a file to a stream for read/write
@@ -64,7 +64,7 @@ void FileStreamOpen(Stream *s, void *providerData)
 {
 	FileData *fileData = (FileData *)providerData;
 
-	ParmBlkPtr pb = NewPB(fileData);
+	ParmBlkPtr pb = (ParmBlkPtr)NewPB(fileData);
 	printf("open. addr: %p, fileData: %p\n", pb, ((MyParamBlock *)pb)->fileData);
 	printf("opened fileName: %s\n", ((MyParamBlock *)pb)->fileData->fileName+1);
 	if (!pb) {
@@ -84,7 +84,7 @@ void FileStreamOpen(Stream *s, void *providerData)
 void FileStreamClose(Stream *s, void *providerData)
 {
 	FileData *fileData = (FileData *)providerData;
-	ParmBlkPtr pb = NewPB(fileData);
+	ParmBlkPtr pb = (ParmBlkPtr)NewPB(fileData);
 	if (!pb) {
 		// error
 		return;
@@ -96,7 +96,7 @@ void FileStreamClose(Stream *s, void *providerData)
 void FileStreamWrite(Stream *s, void *providerData, char *data, short len)
 {
 	FileData *fileData = (FileData *)providerData;
-	ParmBlkPtr pb = NewPB(fileData);
+	ParmBlkPtr pb = (ParmBlkPtr)NewPB(fileData);
 	if (!pb) {
 		// error
 		return;
@@ -109,20 +109,22 @@ void FileStreamWrite(Stream *s, void *providerData, char *data, short len)
 	PBWriteAsync(pb);
 }
 
-void FileStreamRead(FileData *fileData)
+void FileStreamRead(FileData *fileData, MyParamBlock *pb)
 {
-	ParmBlkPtr pb = NewPB(fileData);
+	if (!pb) {
+		pb = NewPB(fileData);
+	}
 	if (!pb) {
 		// error
 		return;
 	}
-	// TODO: try using continuous mode (set bit 7 of ioPosMode)
 	pb->ioParam.ioRefNum = fileData->refNum;
 	pb->ioParam.ioBuffer = fileData->readBuf;
 	pb->ioParam.ioReqCount = sizeof fileData->readBuf;
+	// TODO: use ioPosMode fsAtMark to read in binary mode
 	pb->ioParam.ioPosMode = 0x0D80; // one line at a time from current mark
 	pb->ioParam.ioPosOffset = 0;
-	PBReadAsync(pb);
+	PBReadAsync((ParmBlkPtr)pb);
 }
 
 // handle completed IO operation, in main thread
@@ -133,8 +135,6 @@ void FileStreamCompleted(MyParamBlock *pb)
 	OSErr oe = pb->ioParam.ioResult;
 	unsigned short trap = pb->ioParam.ioTrap;
 
-	//printf("pb: %p, trap: %hx, fileName: %s\n", pb, trap, fileData->fileName+1);
-
 	// Check which type of operation this was
 	switch (trap) {
 		case 0xA400: // Open
@@ -143,10 +143,11 @@ void FileStreamCompleted(MyParamBlock *pb)
 			// check for error
 			if (oe == noErr) {
 				// start reading
-				FileStreamRead(fileData);
+				FileStreamRead(fileData, pb);
 			} else {
 				// notify about error
 				StreamErrored(s, oe);
+				free(pb);
 			}
 			break;
 		case 0xA401: // Close
@@ -156,27 +157,30 @@ void FileStreamCompleted(MyParamBlock *pb)
 			} else {
 				StreamErrored(s, oe);
 			}
+			free(pb);
 			break;
 		case 0xA403: // Write
 			printf("write completed\n");
 			// check ioActCount, ioPosOffset, ioResult
 			break;
 		case 0xA402: // Read
-			//printf("got read [%hu] %s\n", pb->ioParam.ioActCount, pb->ioParam.ioBuffer);
-			//printf("requested: %hu, data ptr: %p\n", pb->ioParam.ioReqCount, pb->ioParam.ioBuffer);
 			if (oe == noErr) {
+				// deliver the data
 				StreamRead(s, pb->ioParam.ioBuffer, pb->ioParam.ioActCount);
 				// do another read
-				FileStreamRead(fileData);
+				FileStreamRead(fileData, pb);
 			} else if (oe == eofErr) {
+				// deliver the data
 				StreamRead(s, pb->ioParam.ioBuffer, pb->ioParam.ioActCount);
 				// signal stream ended
 				StreamEnded(s);
 				// close the file
 				StreamClose(s);
+				free(pb);
 			} else {
 				// pass along error
 				StreamErrored(s, oe);
+				free(pb);
 			}
 			break;
 		case 0xA404: // Control
@@ -207,15 +211,11 @@ void FileStreamComplete(MyParamBlock *pb)
 
 void PollFileStreams()
 {
-	//FileData *fileData = completedPBsHead;
-	//StreamRead(stream);
 	MyParamBlock *pb, *pbNext;
-	//FileData *fileData = (FileData *)providerData;
 	// Handle each completed operation
 	for (pb = completedPBsHead; pb; pb = pbNext) {
 		FileStreamCompleted(pb);
 		pbNext = (MyParamBlock *)pb->ioParam.qLink;
-		free(pb);
 	}
 	completedPBsHead = NULL;
 	completedPBsTail = NULL;
