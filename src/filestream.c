@@ -1,25 +1,34 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <Files.h>
 #include <Devices.h>
 #include "stream.h"
 #include "filestream.h"
 
+typedef struct MyParamBlock MyParamBlock;
+
 typedef struct {
 	char *fileName;
 	short vRefNum;
 	short refNum;
-	ParamBlockRec bp;
 	char readBuf[256];
-	ParmBlkPtr completedPBsHead;
-	ParmBlkPtr completedPBsTail;
+	MyParamBlock *completedPBsHead;
+	MyParamBlock *completedPBsTail;
 } FileData;
 
-void FileStreamComplete(ParmBlkPtr pb);
+struct MyParamBlock {
+	IOParam ioParam;
+	FileData *fileData;
+};
+
+void FileStreamComplete(MyParamBlock *pb);
 void FileStreamOpen(Stream *s, void *providerData);
 void FileStreamClose(Stream *s, void *providerData);
 void FileStreamRead(Stream *s, FileData *fileData);
 void FileStreamWrite(Stream *s, void *providerData, char *data, short len);
 bool FileStreamPoll(Stream *s, void *providerData, char **data, short *len);
+
+IOCompletionUPP asyncFileCompletionProc = nil;
 
 static StreamProvider fileStreamProvider = {
 	.open = FileStreamOpen,
@@ -28,15 +37,26 @@ static StreamProvider fileStreamProvider = {
 	.poll = FileStreamPoll
 };
 
-// create a stream to read/write the given file
-Stream *NewFileStream(char *fileName, short vRefNum)
+ParmBlkPtr NewPB(FileData *fileData)
 {
-	Stream *s = NewStream();
-	if (!s) return NULL;
+	MyParamBlock *pb = malloc(sizeof(MyParamBlock));
+	if (!pb) return NULL;
+	pb->fileData = fileData;
+	if (!asyncFileCompletionProc) {
+		asyncFileCompletionProc = NewIOCompletionProc((void (*) (union ParamBlockRec *) ) FileStreamComplete);
+	}
+	pb->ioParam.ioCompletion = asyncFileCompletionProc;
+	return (ParmBlkPtr)pb;
+}
+
+// provide a file to a stream for read/write
+void ProvideFileStream(Stream *s, char *fileName, short vRefNum)
+{
+	if (!s) return;
 	FileData *fileData = malloc(sizeof(FileData));
 	if (!fileData) {
 		free(s);
-		return NULL;
+		return;
 	}
 	fileData->fileName = fileName;
 	fileData->vRefNum = vRefNum;
@@ -49,7 +69,9 @@ void FileStreamOpen(Stream *s, void *providerData)
 {
 	FileData *fileData = (FileData *)providerData;
 
-	ParmBlkPtr pb = malloc(sizeof(IOParam));
+	ParmBlkPtr pb = NewPB(fileData);
+	printf("open. addr: %p, fileData: %p\n", pb, ((MyParamBlock *)pb)->fileData);
+	printf("opened fileName: %s\n", ((MyParamBlock *)pb)->fileData->fileName+1);
 	if (!pb) {
 		// error
 		return;
@@ -60,27 +82,26 @@ void FileStreamOpen(Stream *s, void *providerData)
 	pb->ioParam.ioVersNum = 0;
 	pb->ioParam.ioPermssn = 0;
 	pb->ioParam.ioMisc = 0;
-	pb->ioParam.ioCompletion = FileStreamComplete;
 	PBOpenAsync(pb);
+	printf("open done. result: %u\n", pb->ioParam.ioResult);
 }
 
 void FileStreamClose(Stream *s, void *providerData)
 {
 	FileData *fileData = (FileData *)providerData;
-	ParmBlkPtr pb = malloc(sizeof(IOParam));
+	ParmBlkPtr pb = NewPB(fileData);
 	if (!pb) {
 		// error
 		return;
 	}
 	pb->ioParam.ioRefNum = fileData->refNum;
-	pb->ioParam.ioCompletion = FileStreamComplete;
 	PBCloseAsync(pb);
 }
 
 void FileStreamWrite(Stream *s, void *providerData, char *data, short len)
 {
 	FileData *fileData = (FileData *)providerData;
-	ParmBlkPtr pb = malloc(sizeof(IOParam));
+	ParmBlkPtr pb = NewPB(fileData);
 	if (!pb) {
 		// error
 		return;
@@ -88,56 +109,94 @@ void FileStreamWrite(Stream *s, void *providerData, char *data, short len)
 	pb->ioParam.ioRefNum = fileData->refNum;
 	pb->ioParam.ioBuffer = data;
 	pb->ioParam.ioReqCount = len;
-	pb->ioParam.ioPosMode = 0;
+	pb->ioParam.ioPosMode = fsAtMark;
 	pb->ioParam.ioPosOffset = 0;
-	pb->ioParam.ioCompletion = FileStreamComplete;
 	PBWriteAsync(pb);
 }
 
 void FileStreamRead(Stream *s, FileData *fileData)
 {
-	ParmBlkPtr pb = malloc(sizeof(IOParam));
+	ParmBlkPtr pb = NewPB(fileData);
 	if (!pb) {
 		// error
 		return;
 	}
+	// TODO: try using continuous mode (set bit 7 of ioPosMode)
 	pb->ioParam.ioRefNum = fileData->refNum;
 	pb->ioParam.ioBuffer = fileData->readBuf;
 	pb->ioParam.ioReqCount = sizeof fileData->readBuf;
 	pb->ioParam.ioPosMode = 0;
-	pb->ioParam.ioPosOffset = 0;
-	pb->ioParam.ioCompletion = FileStreamComplete;
+	pb->ioParam.ioPosOffset = fsAtMark;
 	PBReadAsync(pb);
 }
 
 bool FileStreamPoll(Stream *s, void *providerData, char **data, short *len)
 {
-	ParmBlkPtr pb, pbNext;
 	FileData *fileData = (FileData *)providerData;
-	// For each completed operation
-	for (pb = fileData->completedPBsHead; pb; pb = pbNext) {
-		pbNext = (ParmBlkPtr)pb->ioParam.qLink;
-		OSErr oe = pb->ioParam.ioResult;
-		// Check which type of operation this was
+	MyParamBlock *pb, *pbNext;
 
-		// Get the data
-
-		free(pb);
+	// Get the next completed operation
+	pb = fileData->completedPBsHead;
+	if (!pb) {
+		// no completed operations
+		return false;
 	}
-	fileData->completedPBsHead = NULL;
-	fileData->completedPBsTail = NULL;
-	return false;
+	printf("something completed\n");
 
-	// When open or read completed and not eof, do another read
-	// FileStreamRead(s, fileData)
-	// TODO: try using continuous mode (set bit 7 of ioPosMode)
+	pbNext = (MyParamBlock *)pb->ioParam.qLink;
+	OSErr oe = pb->ioParam.ioResult;
+	// Check which type of operation this was
+	switch (pb->ioParam.ioTrap) {
+		// 0xA000
+		case 0x00: // Open
+			printf("open completed\n");
+			fileData->refNum = pb->ioParam.ioRefNum;
+			// check ioResult
+			// start reading
+			FileStreamRead(s, fileData);
+			break;
+		case 0x01: // Close
+			// check ioResult
+			printf("close completed\n");
+			break;
+		case 0x03: // Write
+			printf("write completed\n");
+			// check ioActCount, ioPosOffset, ioResult
+			break;
+		case 0x02: // Read
+			printf("got read\n");
+			*data = pb->ioParam.ioBuffer;
+			*len = pb->ioParam.ioActCount;
+			if (pb->ioParam.ioResult == eofErr) {
+				//*len = 0;
+			}
+			// do another read
+			FileStreamRead(s, fileData);
+			break;
+		case 0x04: // Control
+		case 0x05: // Status
+		case 0x06: // KillIO
+		default:
+			printf("unhandled operation completed\n");
+	}
+
+	fileData->completedPBsHead = pbNext;
+	if (!pbNext) {
+		// list is empty
+		fileData->completedPBsTail = NULL;
+	}
+	free(pb);
+	return true;
 }
 
 // IO completion function executed in interrupt
-void FileStreamComplete(ParmBlkPtr pb)
+void FileStreamComplete(MyParamBlock *pb)
 {
+	printf("addr: %p\n", pb);
+	return;
+	//printf("fileData: %p, fileName: %s\n", pb->fileData, pb->fileData->fileName+1);
 	// TODO: find a safe place to store the pointer to fileData
-	FileData *fileData = (FileData *)pb->ioParam.ioMisc;
+	FileData *fileData = pb->fileData;
 	// Put the PB on our queue of completed operations.
 	// Then we can retrieve it in Poll.
 	// Make use of the linked-list pointer which is not used after completion.

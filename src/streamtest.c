@@ -3,6 +3,10 @@
 #include <string.h>
 #include <stdbool.h>
 #include "stream.h"
+#include "filestream.h"
+#include "stdoutconsume.h"
+
+Stream *stream;
 
 // handle the next event. return false to quit, true to continue
 bool HandleEvent()
@@ -27,12 +31,20 @@ bool HandleEvent()
 // handle IO operations. return false to quit, true to continue
 bool HandleIO()
 {
+	StreamPoll(stream);
 	return true;
 }
 
 int main()
 {
-	printf("Hello.\n");
+	char *fileName = "\pUntitled:StreamTest";
+	printf("Opening file \"%s\"\n", fileName+1);
+
+	stream = NewStream();
+	StdoutConsumeStream(stream);
+	ProvideFileStream(stream, fileName, 0);
+	StreamOpen(stream);
+
 	while (HandleEvent() && HandleIO());
 	return 0;
 }
