@@ -65,18 +65,34 @@ const char *sprint_ip_addr(ip_addr ip)
 	return addr_str;
 }
 
+// make a tcp param block
+// on success, returns pointer to param block
+// on failure, returns NULL and and sends on error
 TCPiopb *NewTCPPB(TCPData *tcpData)
 {
+	Stream *stream = tcpData->stream;
+	if (!stream) {
+		printf("missing stream in newtcppb\n");
+		StreamErrored(stream, tcpMissingStreamErr);
+		return NULL;
+	}
 	MyTCPiopb *pb = calloc(1, sizeof(MyTCPiopb));
-	if (!pb) return NULL;
+	if (!pb) {
+		StreamErrored(stream, tcpOutOfMemoryErr);
+		return NULL;
+	}
 	pb->tcpData = tcpData;
 	pb->pb.tcpStream = tcpData->tcpStream;
 	if (!tcpRefNum) {
-		// open the driver
+		// open the MacTCP driver
 		OSErr err = OpenDriver("\p.IPP", &tcpRefNum);
-		if (err) {
-			StreamErrored(tcpData->stream, -98);
-			StreamErrored(tcpData->stream, err);
+		if (err != noErr) {
+			if (err == fnfErr) {
+				StreamErrored(stream, tcpMissingDriverErr);
+			} else {
+				StreamErrored(stream, tcpSetupErr);
+			}
+			free(pb);
 			return NULL;
 		}
 	}
@@ -91,29 +107,31 @@ void ProvideTCPActiveStream(Stream *s, ip_addr ip, tcp_port port)
 	TCPData *tcpData = NewTCPData(s);
 	StreamProvide(s, &tcpStreamProvider, tcpData);
 	if (!tcpData) {
-		StreamErrored(s, -1);
+		// NewTCPData will have sent an error
 		return;
 	}
 	tcpData->remoteHost = ip;
 	tcpData->remotePort = port;
 }
 
+// make a data object for a tcp stream
+// on success, returns pointer to tcp data
+// on failure, returns null and sends error
 TCPData *NewTCPData(Stream *s)
 {
 	TCPData *tcpData = malloc(sizeof(TCPData));
-	TCPiopb *pb;
 	if (!tcpData) {
-		StreamErrored(s, -1);
-		return NULL;
-	}
-	if (!(pb = NewTCPPB(tcpData))) {
-		free(tcpData);
-		StreamErrored(s, -2);
+		StreamErrored(s, tcpOutOfMemoryErr);
 		return NULL;
 	}
 	tcpData->stream = s;
 	tcpData->completedPBsTail = NULL;
 	tcpData->completedPBsHead = NULL;
+	TCPiopb *pb = NewTCPPB(tcpData);
+	if (!pb) {
+		free(tcpData);
+		return NULL;
+	}
 	pb->csCode = TCPCreate;
 	pb->csParam.create.rcvBuff = tcpData->recvBuf;
 	pb->csParam.create.rcvBuffLen = sizeof(tcpData->recvBuf);
@@ -123,30 +141,31 @@ TCPData *NewTCPData(Stream *s)
 	// since it should be pretty quick
 	PBControlSync((ParmBlkPtr)pb);
 	tcpData->tcpStream = pb->tcpStream;
-	if (pb->ioResult != noErr) {
-		StreamErrored(s, -99);
-		StreamErrored(s, pb->ioResult);
-	} else {
-		printf("created tcp stream\n");
+	switch (pb->ioResult) {
+		case noErr:
+			return tcpData;
+		case insufficientResources:
+			StreamErrored(s, tcpStreamLimitErr);
+		default:
+			StreamErrored(s, tcpCreateStreamErr);
 	}
-	return tcpData;
+	return NULL;
 }
 
-void TCPStreamOpen(Stream *s, void *providerData)
+void TCPStreamOpen(Stream *stream, void *providerData)
 {
 	TCPData *tcpData = (TCPData *)providerData;
-	TCPOpenPB *openPb;
 	if (!tcpData) {
-		StreamErrored(s, -3);
+		printf("missing stream in open\n");
+		StreamErrored(stream, tcpMissingStreamErr);
 		return;
 	}
 	TCPiopb *pb = NewTCPPB(tcpData);
 	if (!pb) {
-		StreamErrored(s, -4);
 		return;
 	}
 
-	openPb = &pb->csParam.open;
+	TCPOpenPB *openPb = &pb->csParam.open;
 	pb->csCode = TCPActiveOpen;
 	pb->ioCompletion = TCPIOComplete;
 	openPb->remoteHost = tcpData->remoteHost;
@@ -154,11 +173,10 @@ void TCPStreamOpen(Stream *s, void *providerData)
 	openPb->userDataPtr = providerData;
 
 	printf("port: %hu. stream: %p\n", openPb->remotePort, pb->tcpStream);
-	puts("press enter\n");
+	puts("press enter?\n");
 	getchar();
 
 	PBControlAsync((ParmBlkPtr)pb);
-	puts("press enter\n");
 	printf("open done. result: %hd\n", pb->ioResult);
 	// TODO: check for completion here in case it was synchronous
 }
@@ -189,10 +207,24 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 {
 	switch (pb->pb.csCode) {
 		case TCPActiveOpen:
-			printf("opened from port %hu\n", pb->pb.csParam.open.localPort);
-			StreamOpened(stream);
+			switch (pb->pb.ioResult) {
+				case noErr:
+					StreamOpened(stream);
+					break;
+				case connectionTerminated:
+					StreamErrored(stream, tcpConnectErr);
+					break;
+				default:
+					printf("open error: %hd\n", pb->pb.ioResult);
+					StreamErrored(stream, tcpConnectErr);
+			}
 			free(pb);
 			break;
+		case TCPPassiveOpen:
+		case TCPClose:
+		case TCPAbort:
+		case TCPSend:
+		case TCPNoCopyRcv:
 		default:
 			printf("unhandled TCP operation completed\n");
 	}
@@ -216,13 +248,13 @@ pascal void TCPNotifyProc(
 {
 	switch (eventCode) {
 		case TCPClosing:
-			printf("tcp stream closing\n");
+			printf("tcp connection closing\n");
 		break;
 		case TCPULPTimeout:
 			printf("tcp timeout\n");
 		break;
 		case TCPTerminate:
-			printf("tcp stream terminated\n");
+			printf("tcp connection terminated\n");
 		break;
 		case TCPDataArrival:
 			printf("tcp data arrival\n");
