@@ -1,11 +1,14 @@
-#include <stdlib.h>
-#include <stdio.h>
 #include <Files.h>
 #include <Devices.h>
 #include <Processes.h>
 #include <MacTCP.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdbool.h>
 #include "stream.h"
 #include "tcpstream.h"
+
+#define ARRAYSIZE(array) (sizeof(array) / sizeof((array)[0]))
 
 typedef struct MyTCPiopb MyTCPiopb;
 
@@ -17,6 +20,9 @@ typedef struct {
 	tcp_port remotePort;
 	MyTCPiopb *completedPBsHead;
 	MyTCPiopb *completedPBsTail;
+	bool hasDataArrived;
+	bool isRecvInProgress;
+	rdsEntry rds[32];
 } TCPData;
 
 struct MyTCPiopb {
@@ -31,7 +37,7 @@ void TCPStreamClose(Stream *s, void *providerData);
 void TCPStreamWrite(Stream *s, void *providerData, char *data, short len);
 void TCPStreamPoll(Stream *s, void *providerData);
 
-//void TCPStreamRead(TCPData *fileData, TCPiopb *pb);
+void TCPStreamReceive(TCPData *tcpData);
 void TCPIOComplete(TCPiopb *thePB);
 void TCPStreamCompleted(Stream *s, MyTCPiopb *pb);
 
@@ -83,6 +89,7 @@ TCPiopb *NewTCPPB(TCPData *tcpData)
 	}
 	pb->tcpData = tcpData;
 	pb->pb.tcpStream = tcpData->tcpStream;
+	pb->pb.ioCompletion = TCPIOComplete;
 	if (!tcpRefNum) {
 		// open the MacTCP driver
 		OSErr err = OpenDriver("\p.IPP", &tcpRefNum);
@@ -127,6 +134,8 @@ TCPData *NewTCPData(Stream *s)
 	tcpData->stream = s;
 	tcpData->completedPBsTail = NULL;
 	tcpData->completedPBsHead = NULL;
+	tcpData->isRecvInProgress = false;
+	tcpData->hasDataArrived = false;
 	TCPiopb *pb = NewTCPPB(tcpData);
 	if (!pb) {
 		free(tcpData);
@@ -167,17 +176,16 @@ void TCPStreamOpen(Stream *stream, void *providerData)
 
 	TCPOpenPB *openPb = &pb->csParam.open;
 	pb->csCode = TCPActiveOpen;
-	pb->ioCompletion = TCPIOComplete;
 	openPb->remoteHost = tcpData->remoteHost;
 	openPb->remotePort = tcpData->remotePort;
 	openPb->userDataPtr = providerData;
 
 	printf("port: %hu. stream: %p\n", openPb->remotePort, pb->tcpStream);
-	puts("press enter?\n");
-	getchar();
+	//puts("open stream?\n");
+	//getchar();
 
 	PBControlAsync((ParmBlkPtr)pb);
-	printf("open done. result: %hd\n", pb->ioResult);
+	//printf("open done. result: %hd\n", pb->ioResult);
 	// TODO: check for completion here in case it was synchronous
 }
 
@@ -189,10 +197,31 @@ void TCPStreamWrite(Stream *s, void *providerData, char *data, short len)
 {
 }
 
+// get data
+void TCPStreamReceive(TCPData *tcpData)
+{
+	if (tcpData->isRecvInProgress) return;
+	tcpData->isRecvInProgress = true;
+
+	TCPiopb *pb = NewTCPPB(tcpData);
+	if (!pb) return;
+
+	TCPReceivePB *receivePb = &pb->csParam.receive;
+	pb->csCode = TCPNoCopyRcv;
+	receivePb->userDataPtr = (Ptr)tcpData;
+	receivePb->secondTimeStamp = 5;
+	receivePb->rdsPtr = (Ptr)tcpData->rds;
+	receivePb->rdsLength = ARRAYSIZE(tcpData->rds);
+	PBControlAsync((ParmBlkPtr)pb);
+}
+
+// called by Streams Manager (not in interrupt)
+// after we requested it with StreamWait
 void TCPStreamPoll(Stream *stream, void *providerData)
 {
 	TCPData *tcpData = (TCPData *)providerData;
 	MyTCPiopb *pb, *pbNext;
+
 	// Handle each completed operation
 	for (pb = tcpData->completedPBsHead; pb; pb = pbNext) {
 		TCPStreamCompleted(stream, pb);
@@ -200,11 +229,21 @@ void TCPStreamPoll(Stream *stream, void *providerData)
 	}
 	tcpData->completedPBsHead = NULL;
 	tcpData->completedPBsTail = NULL;
+
+	// Receive data that may have arrived
+	if (tcpData->hasDataArrived) {
+		TCPStreamReceive(tcpData);
+		tcpData->hasDataArrived = false;
+	}
 }
 
 // handle completed IO operation, not in interrupt
 void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 {
+	TCPData *tcpData = pb->tcpData;
+	if (!tcpData) {
+		return;
+	}
 	switch (pb->pb.csCode) {
 		case TCPActiveOpen:
 			switch (pb->pb.ioResult) {
@@ -224,7 +263,22 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 		case TCPClose:
 		case TCPAbort:
 		case TCPSend:
+			break;
 		case TCPNoCopyRcv:
+			tcpData->isRecvInProgress = false;
+			rdsEntry *rds = tcpData->rds;
+			for (; rds->length; rds++) {
+				StreamRead(stream, rds->ptr, rds->length);
+			}
+			// return rds bufs
+			pb->pb.csCode = TCPRcvBfrReturn;
+			// reuse pb. rds pointer is already set
+			OSErr oe = PBControlSync((ParmBlkPtr)pb);
+			if (oe != noErr) {
+				StreamErrored(stream, tcpInternalErr);
+			}
+			free(pb);
+			break;
 		default:
 			printf("unhandled TCP operation completed\n");
 	}
@@ -234,7 +288,7 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 pascal void TCPNotifyProc(
 	StreamPtr tcpStream,
 	TCPEventCode eventCode,
-	Ptr userDataPtr,
+	Ptr userData,
 	TCPTerminationReason terminReason,
 	struct ICMPReport *icmpMsg)
 	/*
@@ -246,6 +300,14 @@ pascal void TCPNotifyProc(
 	 * termination.
 	 */
 {
+	TCPData *tcpData = (TCPData *)userData;
+	if (!tcpData) {
+		return;
+	}
+	Stream *stream = tcpData->stream;
+	if (!stream) {
+		return;
+	}
 	switch (eventCode) {
 		case TCPClosing:
 			printf("tcp connection closing\n");
@@ -257,7 +319,8 @@ pascal void TCPNotifyProc(
 			printf("tcp connection terminated\n");
 		break;
 		case TCPDataArrival:
-			printf("tcp data arrival\n");
+			tcpData->hasDataArrived = true;
+			StreamWait(stream);
 		break;
 		case TCPUrgent:
 		break;

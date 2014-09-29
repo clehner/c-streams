@@ -78,7 +78,7 @@ void FileStreamOpen(Stream *s, void *providerData)
 	pb->ioParam.ioNamePtr = fileData->fileName;
 	pb->ioParam.ioVRefNum = fileData->vRefNum;
 	pb->ioParam.ioVersNum = 0;
-	pb->ioParam.ioPermssn = 0;
+	pb->ioParam.ioPermssn = fsRdPerm;
 	pb->ioParam.ioMisc = 0;
 	PBOpenAsync(pb);
 	printf("open done. result: %d\n", pb->ioParam.ioResult);
@@ -124,9 +124,8 @@ void FileStreamRead(FileData *fileData, MyParamBlock *pb)
 	pb->ioParam.ioRefNum = fileData->refNum;
 	pb->ioParam.ioBuffer = fileData->readBuf;
 	pb->ioParam.ioReqCount = sizeof fileData->readBuf;
-	// TODO: use ioPosMode fsAtMark to read in binary mode
-	pb->ioParam.ioPosMode = 0x0D80; // one line at a time from current mark
-	pb->ioParam.ioPosOffset = 0;
+	//pb->ioParam.ioPosMode = 0x0D80; // one line at a time from current mark
+	pb->ioParam.ioPosOffset = fsAtMark;
 	PBReadAsync((ParmBlkPtr)pb);
 }
 

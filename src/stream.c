@@ -9,7 +9,6 @@ struct Stream {
 	StreamProvider *provider;
 	void *providerData;
 	struct Stream *nextReady;
-	bool isReady;
 };
 
 Stream *readyStreamsHead = NULL;
@@ -20,7 +19,6 @@ Stream *NewStream()
 {
 	Stream *s = malloc(sizeof(Stream));
 	s->nextReady = NULL;
-	s->isReady = false;
 	return s;
 }
 
@@ -92,11 +90,10 @@ void StreamEnded(Stream *stream)
 // May be called in interrupt.
 void StreamWait(Stream *stream)
 {
-	if (stream->isReady) {
-		// only add to the queue once
+	if (stream->nextReady) {
+		// already in the queue
 		return;
 	}
-	stream->isReady = true;
 	if (readyStreamsTail) {
 		readyStreamsTail->nextReady = stream;
 	} else {
@@ -112,8 +109,8 @@ void PollStreams()
 	for (stream = readyStreamsHead; stream; stream = next) {
 		// tell the stream to handle its completed operations
 		stream->provider->poll(stream, stream->providerData);
-		stream->isReady = false;
 		next = stream->nextReady;
+		stream->nextReady = NULL;
 	}
 	readyStreamsHead = NULL;
 	readyStreamsTail = NULL;

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "stdoutconsume.h"
 #include "stream.h"
 
@@ -29,8 +30,16 @@ void StdoutConsumeOpen(void *consumerData)
 void StdoutConsumeData(void *consumerData, char *data, short len)
 {
 	// print the data to stdout
+	short line_len;
+	char *line_end;
+	while ((line_end = memchr(data, '\r', len))) {
+		*line_end = '\0';
+		puts(data);
+		line_len = line_end - data + 1;
+		data += line_len;
+		len -= line_len;
+	}
 	fwrite(data, len, 1, stdout);
-	putchar('\n');
 }
 
 void StdoutConsumeError(void *consumerData, short err)
