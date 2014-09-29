@@ -12,7 +12,8 @@ enum {
     tcpStreamLimitErr = -5,
     tcpCreateStreamErr = -6,
     tcpConnectErr = -7,
-    tcpInternalErr = -8,
+    tcpTerminatedErr = -8,
+    tcpInternalErr = -9,
 };
 
 #define IP_ADDR(a,b,c,d) ((a << 24) | (b << 16) | (c << 8) | d)

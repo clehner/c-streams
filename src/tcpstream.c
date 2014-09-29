@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 #include "stream.h"
 #include "tcpstream.h"
 
@@ -78,7 +79,6 @@ TCPiopb *NewTCPPB(TCPData *tcpData)
 {
 	Stream *stream = tcpData->stream;
 	if (!stream) {
-		printf("missing stream in newtcppb\n");
 		StreamErrored(stream, tcpMissingStreamErr);
 		return NULL;
 	}
@@ -165,20 +165,16 @@ void TCPStreamOpen(Stream *stream, void *providerData)
 {
 	TCPData *tcpData = (TCPData *)providerData;
 	if (!tcpData) {
-		printf("missing stream in open\n");
 		StreamErrored(stream, tcpMissingStreamErr);
 		return;
 	}
 	TCPiopb *pb = NewTCPPB(tcpData);
-	if (!pb) {
-		return;
-	}
+	if (!pb) return;
 
 	TCPOpenPB *openPb = &pb->csParam.open;
 	pb->csCode = TCPActiveOpen;
 	openPb->remoteHost = tcpData->remoteHost;
 	openPb->remotePort = tcpData->remotePort;
-	openPb->userDataPtr = providerData;
 
 	printf("port: %hu. stream: %p\n", openPb->remotePort, pb->tcpStream);
 	//puts("open stream?\n");
@@ -189,12 +185,73 @@ void TCPStreamOpen(Stream *stream, void *providerData)
 	// TODO: check for completion here in case it was synchronous
 }
 
-void TCPStreamClose(Stream *s, void *providerData)
+void TCPStreamClose(Stream *stream, void *providerData)
 {
+	TCPData *tcpData = (TCPData *)providerData;
+	if (!tcpData) {
+		StreamErrored(stream, tcpMissingStreamErr);
+		return;
+	}
+	TCPiopb *pb = NewTCPPB(tcpData);
+	if (!pb) return;
+
+	TCPClosePB *closePb = &pb->csParam.close;
+	pb->csCode = TCPClose;
+	closePb->ulpTimeoutValue = 30; // seconds without FIN acknowledged
+	closePb->ulpTimeoutAction = 1; // abort on timeout
+	closePb->validityFlags = 0xC0; // timeout value and action are valid
+	PBControlAsync((ParmBlkPtr)pb);
 }
+
+/*
+void TCPStreamAbort(Stream *stream, void *providerData)
+{
+	TCPData *tcpData = (TCPData *)providerData;
+	if (!tcpData) {
+		StreamErrored(stream, tcpMissingStreamErr);
+		return;
+	}
+	TCPiopb *pb = NewTCPPB(tcpData);
+	if (!pb) return;
+
+	pb->csCode = TCPAbort;
+	PBControlAsync((ParmBlkPtr)pb);
+}
+*/
 
 void TCPStreamWrite(Stream *s, void *pData, char *data, unsigned short len)
 {
+	TCPData *tcpData = (TCPData *)pData;
+	if (!tcpData) {
+		StreamErrored(s, tcpMissingStreamErr);
+		return;
+	}
+	TCPiopb *pb = NewTCPPB(tcpData);
+	if (!pb) return;
+
+	pb->csCode = TCPSend;
+
+	// TODO: allow data to be sent without copying
+	// copy the data into a new wds struct
+	// second element of the wds list is null terminator
+	wdsEntry *wds = calloc(2, sizeof(wdsEntry));
+	if (!wds) {
+		StreamErrored(s, tcpOutOfMemoryErr);
+		free(pb);
+		return;
+	}
+	char *data_copy = malloc(len);
+	if (!data_copy) {
+		StreamErrored(s, tcpOutOfMemoryErr);
+		free(pb);
+		free(wds);
+		return;
+	}
+	memcpy(data_copy, data, len);
+	wds->length = len;
+	wds->ptr = data_copy;
+	pb->csParam.send.wdsPtr = (Ptr)wds;
+	PBControlAsync((ParmBlkPtr)pb);
 }
 
 // get data
@@ -208,12 +265,37 @@ void TCPStreamReceive(TCPData *tcpData)
 
 	TCPReceivePB *receivePb = &pb->csParam.receive;
 	pb->csCode = TCPNoCopyRcv;
-	receivePb->userDataPtr = (Ptr)tcpData;
 	receivePb->secondTimeStamp = 5;
 	receivePb->rdsPtr = (Ptr)tcpData->rds;
 	receivePb->rdsLength = ARRAYSIZE(tcpData->rds);
 	PBControlAsync((ParmBlkPtr)pb);
 }
+
+/*
+// release the TCP stream and free the memory
+void TCPStreamFree(Stream *stream, void *providerData)
+{
+	TCPData *tcpData = (TCPData *)providerData;
+	TCPiopb pb;
+	pb.csCode = TCPRelease;
+	pb.tcpStream = tcpData->tcpStream;
+	pb.ioCompletion = TCPIOComplete;
+	if (!tcpRefNum) {
+		StreamErrored(stream, tcpMissingStreamErr);
+		return;
+	}
+	pb.ioCRefNum = tcpRefNum;
+	switch (PBControlSync((ParmBlkPtr)&pb)) {
+		case invalidStreamPtr:
+			StreamErrored(stream, tcpMissingStreamErr);
+			break;
+		case noErr:
+			// TODO: make sure it doesn't get called again
+			free(tcpData);
+			break;
+	}
+}
+*/
 
 // called by Streams Manager (not in interrupt)
 // after we requested it with StreamWait
@@ -245,6 +327,7 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 		return;
 	}
 	switch (pb->pb.csCode) {
+		case TCPPassiveOpen:
 		case TCPActiveOpen:
 			switch (pb->pb.ioResult) {
 				case noErr:
@@ -259,11 +342,67 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 			}
 			free(pb);
 			break;
-		case TCPPassiveOpen:
 		case TCPClose:
-		case TCPAbort:
-		case TCPSend:
+			switch (pb->pb.ioResult) {
+				case noErr:
+					StreamEnded(stream);
+					StreamClosed(stream);
+					break;
+				case connectionTerminated:
+					StreamErrored(stream, tcpTerminatedErr);
+					StreamClosed(stream);
+					break;
+				case invalidStreamPtr:
+				case connectionDoesntExist:
+				case connectionClosing:
+					StreamErrored(stream, tcpMissingStreamErr);
+					break;
+				default:
+					StreamErrored(stream, tcpInternalErr);
+			}
+			free(pb);
 			break;
+		/*
+		case TCPAbort:
+			switch (pb->pb.ioResult) {
+				case noErr:
+					StreamClosed(stream);
+					break;
+				case invalidStreamPtr:
+				case connectionDoesntExist:
+					StreamErrored(stream, tcpMissingStreamErr);
+					break;
+				default:
+					StreamErrored(stream, tcpInternalErr);
+			}
+			free(pb);
+		*/
+		case TCPSend: {
+			// free the wds and sent data
+			wdsEntry *wds = (wdsEntry *)pb->pb.csParam.send.wdsPtr;
+			free(wds->ptr);
+			free(wds);
+			switch (pb->pb.ioResult) {
+				case noErr:
+					// success!
+					break;
+				case connectionTerminated:
+					StreamErrored(stream, tcpTerminatedErr);
+					StreamClosed(stream);
+					break;
+				case invalidStreamPtr:
+				case connectionDoesntExist:
+				case connectionClosing:
+					StreamErrored(stream, tcpMissingStreamErr);
+					break;
+				case invalidLength:
+				case invalidWDS:
+				default:
+					StreamErrored(stream, tcpInternalErr);
+			}
+			free(pb);
+			break;
+		}
 		case TCPNoCopyRcv:
 			tcpData->isRecvInProgress = false;
 			rdsEntry *rds = tcpData->rds;
