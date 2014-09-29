@@ -34,7 +34,7 @@ struct MyTCPiopb {
 TCPData *NewTCPData(Stream *s);
 void TCPStreamOpen(Stream *s, void *providerData);
 void TCPStreamClose(Stream *s, void *providerData);
-void TCPStreamWrite(Stream *s, void *providerData, char *data, short len);
+void TCPStreamWrite(Stream *s, void *pData, char *data, unsigned short len);
 void TCPStreamPoll(Stream *s, void *providerData);
 
 void TCPStreamReceive(TCPData *tcpData);
@@ -193,7 +193,7 @@ void TCPStreamClose(Stream *s, void *providerData)
 {
 }
 
-void TCPStreamWrite(Stream *s, void *providerData, char *data, short len)
+void TCPStreamWrite(Stream *s, void *pData, char *data, unsigned short len)
 {
 }
 

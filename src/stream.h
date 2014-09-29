@@ -20,7 +20,7 @@ struct StreamConsumer {
 struct StreamProvider {
 	void (*open)(Stream *s, void *providerData);
 	void (*close)(Stream *s, void *providerData);
-	void (*write)(Stream *s, void *providerData, char *data, short len);
+	void (*write)(Stream *s, void *pData, char *data, unsigned short len);
 	void (*poll)(Stream *s, void *providerData);
 };
 
@@ -31,7 +31,7 @@ void StreamConsume(Stream *s, StreamConsumer *consumer, void *consumerData);
 void StreamProvide(Stream *s, StreamProvider *provider, void *providerData);
 void StreamOpen(Stream *stream);
 void StreamClose(Stream *stream);
-void StreamWrite(Stream *stream, char *data, short len);
+void StreamWrite(Stream *stream, char *data, unsigned short len);
 
 // call by provider
 void StreamRead(Stream *stream, char *data, short len);

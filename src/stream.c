@@ -50,7 +50,7 @@ void StreamClose(Stream *stream)
 
 // write some data to the stream provider
 // Consumer should call this
-void StreamWrite(Stream *stream, char *data, short len)
+void StreamWrite(Stream *stream, char *data, unsigned short len)
 {
 	stream->provider->write(stream, stream->providerData, data, len);
 }

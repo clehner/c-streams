@@ -24,7 +24,7 @@ struct MyParamBlock {
 
 void FileStreamOpen(Stream *s, void *providerData);
 void FileStreamClose(Stream *s, void *providerData);
-void FileStreamWrite(Stream *s, void *providerData, char *data, short len);
+void FileStreamWrite(Stream *s, void *pData, char *data, unsigned short len);
 void FileStreamPoll(Stream *s, void *providerData);
 void FileStreamRead(FileData *fileData, MyParamBlock *pb);
 void FileStreamComplete(MyParamBlock *pb);
@@ -96,9 +96,9 @@ void FileStreamClose(Stream *s, void *providerData)
 	PBCloseAsync(pb);
 }
 
-void FileStreamWrite(Stream *s, void *providerData, char *data, short len)
+void FileStreamWrite(Stream *s, void *pData, char *data, unsigned short len)
 {
-	FileData *fileData = (FileData *)providerData;
+	FileData *fileData = (FileData *)pData;
 	ParmBlkPtr pb = (ParmBlkPtr)NewPB(fileData);
 	if (!pb) {
 		// error
