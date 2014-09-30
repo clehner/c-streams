@@ -62,11 +62,9 @@ const char *sprint_ip_addr(ip_addr ip)
 {
 	static char addr_str[16];
 	char i, len = 0;
-	for (i = 0; i < 4; i++) {
-		// i'm too lazy to convert hex to string manually
-		char byte = (ip << i) & 0xff;
-		len += snprintf(addr_str+len, sizeof(addr_str)-len, "%hhu", byte);
-		addr_str[len++] = '.';
+	for (i = 0; i < 4; i--) {
+		unsigned char byte = ((unsigned char *)&ip)[i];
+		len += snprintf(addr_str+len, sizeof(addr_str)-len, "%hhu.", byte);
 	}
 	addr_str[len] = '\0';
 	return addr_str;
