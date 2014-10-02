@@ -1,18 +1,26 @@
-TOOLCHAIN = /opt/Retro68-build/toolchain
-HOSTSYSTEM = $(TOOLCHAIN)/bin/m68k-unknown-elf
+PLATFORM   = m68k-unknown-elf
+TOOLCHAIN  = /opt/Retro68-build/toolchain
+HOSTSYSTEM = $(TOOLCHAIN)/bin/$(PLATFORM)
+LIBDESTDIR = $(TOOLCHAIN)/$(PLATFORM)/lib
 
-BIN     = StreamTest
 CC      = $(HOSTSYSTEM)-gcc
 LD      = $(HOSTSYSTEM)-g++
+AR      = $(HOSTSYSTEM)-ar rcs
+CFLAGS  = -O3 -DNDEBUG -MMD
+CFLAGS += -Wno-multichar
+LDFLAGS = $(TOOLCHAIN)/../build-target/Console/libRetroConsole.a -lretrocrt
+LDFLAGS+= -O3 -DNDEBUG -Wl,-elf2flt -Wl,-q -Wl,-Map=linkmap.txt -Wl,-undefined=consolewrite
+
+BIN     = StreamTest
 SRC     = $(wildcard src/*.c)
 INC     = $(wildcard src/*.h)
 OBJ     = $(SRC:.c=.o)
 DEP     = $(SRC:.c=.d)
-CFLAGS  = -O3 -DNDEBUG
-CFLAGS += -Wno-multichar
-CFLAGS += -MMD -I$(TOOLCHAIN)/$(ARCH)/include
-LDFLAGS = $(TOOLCHAIN)/../build-target/Console/libRetroConsole.a -lretrocrt
-LDFLAGS+= -O3 -DNDEBUG -Wl,-elf2flt -Wl,-q -Wl,-Map=linkmap.txt -Wl,-undefined=consolewrite
+
+LIB     = libcstreams.a
+SRC_LIB = src/stream.c src/filestream.c src/tcpstream.c
+OBJ_LIB = $(SRC_LIB:.c=.o)
+INC_LIB = $(SRC_LIB:.c=.h)
 
 MINI_VMAC_DIR=~/Mac/Emulation/Mini\ vMac
 MINI_VMAC=$(MINI_VMAC_DIR)/Mini\ vMac
@@ -23,9 +31,10 @@ ifndef V
 	QUIET_LINK = @echo ' LINK ' $@;
 	QUIET_APPL = @echo ' APPL ' $@;
 	QUIET_RUN  = @echo ' RUN  ' $<;
+	QUIET_AR   = @echo ' AR   ' $@;
 endif
 
-all: $(BIN).bin
+all: $(LIB) $(BIN).bin
 
 -include $(DEP)
 
@@ -43,6 +52,12 @@ check: $(SRC) $(INC)
 
 wc:
 	@wc -l $(SRC) $(INC) | sort -n
+
+$(LIB): $(OBJ_LIB)
+	$(QUIET_AR)$(AR) $@ $^
+
+install: $(LIB)
+	cp $(LIB) $(LIBDESTDIR)
 
 clean:
 	rm -f $(BIN) $(OBJ) $(DEP) check linkmap.txt \
