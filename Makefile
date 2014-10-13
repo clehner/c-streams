@@ -9,13 +9,14 @@ AR      = $(HOSTSYSTEM)-ar rcs
 CFLAGS  = -O3 -DNDEBUG -MMD
 CFLAGS += -Wno-multichar
 LDFLAGS = $(TOOLCHAIN)/../build-target/Console/libRetroConsole.a -lretrocrt
-LDFLAGS+= -O3 -DNDEBUG -Wl,-elf2flt -Wl,-q -Wl,-Map=linkmap.txt -Wl,-undefined=consolewrite
+LDFLAGS+= -O3 -DNDEBUG -Wl,-elf2flt -Wl,-q -Wl,-Map=linkmap.txt -Wl,-undefined=consolewrite -Wl,-gc-sections
 
 BIN     = StreamTest
 SRC     = $(wildcard src/*.c)
 INC     = $(wildcard src/*.h)
 OBJ     = $(SRC:.c=.o)
 DEP     = $(SRC:.c=.d)
+SHAREDIR= Shared
 
 LIB     = libcstreams.a
 SRC_LIB = src/stream.c src/filestream.c src/tcpstream.c
@@ -29,7 +30,7 @@ MINI_VMAC_LAUNCHER_DISK=$(MINI_VMAC_DIR)/launcher-sys.dsk
 ifndef V
 	QUIET_CC   = @echo ' CC   ' $<;
 	QUIET_LINK = @echo ' LINK ' $@;
-	QUIET_APPL = @echo ' APPL ' $@;
+	QUIET_APPL = @echo ' APPL ' $*;
 	QUIET_RUN  = @echo ' RUN  ' $<;
 	QUIET_AR   = @echo ' AR   ' $@;
 endif
@@ -38,7 +39,7 @@ all: $(LIB) $(BIN).bin
 
 -include $(DEP)
 
-%.dsk %.bin: %
+%.dsk %.bin %.APPL .rsrc/%.APPL .finf/%.APPL: %
 	$(QUIET_APPL)$(TOOLCHAIN)/bin/MakeAPPL -c $< -o $*
 
 $(BIN): $(OBJ)
@@ -65,5 +66,10 @@ clean:
 
 run: $(BIN).dsk
 	$(QUIET_RUN)$(MINI_VMAC) $(MINI_VMAC_LAUNCHER_DISK) $(DISK) $(BIN).dsk
+
+share: $(BIN).APPL
+	cp $(BIN).APPL $(SHAREDIR)/
+	@cp .rsrc/$(BIN).APPL $(SHAREDIR)/.rsrc/
+	@cp .finf/$(BIN).APPL $(SHAREDIR)/.finf/
 
 .PHONY: clean wc
