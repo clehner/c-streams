@@ -271,11 +271,16 @@ void TCPStreamReceive(TCPData *tcpData)
 	PBControlAsync((ParmBlkPtr)pb);
 }
 
-/*
-// release the TCP stream and free the memory
-void TCPStreamFree(Stream *stream, void *providerData)
+void TCPStreamClosed(TCPData *tcpData)
 {
-	TCPData *tcpData = (TCPData *)providerData;
+	StreamClosed(tcpData->stream);
+	TCPStreamRelease(tcpData->stream, tcpData);
+}
+
+// release the TCP stream and free the memory
+//void TCPStreamFree(Stream *stream, void *providerData)
+void TCPStreamRelease(Stream *stream,  TCPData *tcpData)
+{
 	TCPiopb pb;
 	pb.csCode = TCPRelease;
 	pb.tcpStream = tcpData->tcpStream;
@@ -291,11 +296,11 @@ void TCPStreamFree(Stream *stream, void *providerData)
 			break;
 		case noErr:
 			// TODO: make sure it doesn't get called again
-			free(tcpData);
+			//free(tcpData);
 			break;
 	}
+	tcpData->tcpStream = 0;
 }
-*/
 
 // called by Streams Manager (not in interrupt)
 // after we requested it with StreamWait
@@ -346,11 +351,11 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 			switch (pb->pb.ioResult) {
 				case noErr:
 					StreamEnded(stream);
-					StreamClosed(stream);
+					TCPStreamClosed(tcpData);
 					break;
 				case connectionTerminated:
 					StreamErrored(stream, tcpTerminatedErr);
-					StreamClosed(stream);
+					TCPStreamClosed(tcpData);
 					break;
 				case invalidStreamPtr:
 				case connectionDoesntExist:
@@ -366,7 +371,7 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 		case TCPAbort:
 			switch (pb->pb.ioResult) {
 				case noErr:
-					StreamClosed(stream);
+					TCPStreamClosed(tcpData);
 					break;
 				case invalidStreamPtr:
 				case connectionDoesntExist:
@@ -388,7 +393,7 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 					break;
 				case connectionTerminated:
 					StreamErrored(stream, tcpTerminatedErr);
-					StreamClosed(stream);
+					TCPStreamClosed(tcpData);
 					break;
 				case invalidStreamPtr:
 				case connectionDoesntExist:
