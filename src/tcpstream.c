@@ -41,6 +41,8 @@ void TCPStreamPoll(Stream *s, void *providerData);
 void TCPStreamReceive(TCPData *tcpData);
 void TCPIOComplete(TCPiopb *thePB);
 void TCPStreamCompleted(Stream *s, MyTCPiopb *pb);
+void TCPStreamRelease(Stream *stream,  TCPData *tcpData);
+void TCPStreamClosed(TCPData *tcpData);
 
 pascal void TCPNotifyProc(StreamPtr tcpStream, TCPEventCode eventCode,
 	Ptr userDataPtr, TCPTerminationReason terminReason,
@@ -62,11 +64,11 @@ const char *sprint_ip_addr(ip_addr ip)
 {
 	static char addr_str[16];
 	char i, len = 0;
-	for (i = 0; i < 4; i--) {
+	for (i = 0; i < 4; i++) {
 		unsigned char byte = ((unsigned char *)&ip)[i];
 		len += snprintf(addr_str+len, sizeof(addr_str)-len, "%hhu.", byte);
 	}
-	addr_str[len] = '\0';
+	addr_str[len-1] = '\0';
 	return addr_str;
 }
 
@@ -76,7 +78,7 @@ const char *sprint_ip_addr(ip_addr ip)
 TCPiopb *NewTCPPB(TCPData *tcpData)
 {
 	Stream *stream = tcpData->stream;
-	if (!stream) {
+	if (!stream || !tcpData->tcpStream) {
 		StreamErrored(stream, tcpMissingStreamErr);
 		return NULL;
 	}

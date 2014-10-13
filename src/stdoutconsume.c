@@ -39,7 +39,8 @@ void StdoutConsumeData(void *consumerData, char *data, short len)
 		data += line_len;
 		len -= line_len;
 	}
-	fwrite(data, len, 1, stdout);
+	if (len > 1 || (len == 0 && data[0] != '\0'))
+		fwrite(data, len, 1, stdout);
 }
 
 void StdoutConsumeError(void *consumerData, short err)
