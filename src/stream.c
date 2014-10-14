@@ -1,24 +1,23 @@
+#include <OSUtils.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include "stream.h"
 
 // stream object: a connection between a consumer and provider of data
 struct Stream {
+	QElem q;
 	StreamConsumer *consumer;
 	void *consumerData;
 	StreamProvider *provider;
 	void *providerData;
-	struct Stream *nextReady;
 };
 
-Stream *readyStreamsHead = NULL;
-Stream *readyStreamsTail = NULL;
+QHdr readyStreams = {0};
 
 // create a new stream object
 Stream *NewStream()
 {
-	Stream *s = malloc(sizeof(Stream));
-	s->nextReady = NULL;
+	Stream *s = calloc(1, sizeof(Stream));
 	return s;
 }
 
@@ -90,28 +89,27 @@ void StreamEnded(Stream *stream)
 // May be called in interrupt.
 void StreamWait(Stream *stream)
 {
-	if (stream->nextReady) {
+	if (stream->q.qData[0]) {
 		// already in the queue
 		return;
 	}
-	if (readyStreamsTail) {
-		readyStreamsTail->nextReady = stream;
-	} else {
-		readyStreamsHead = stream;
-	}
-	readyStreamsTail = stream;
+	// add the stream to the queue
+	stream->q.qData[0] = 1;
+	Enqueue((QElem *)stream, &readyStreams);
 }
 
 void PollStreams()
 {
-	Stream *stream, *next;
-	// Handle each ready operation
-	for (stream = readyStreamsHead; stream; stream = next) {
+	Stream *stream;
+	// Handle each ready operation, popping them off the queue
+	while (readyStreams.qHead) {
+		stream = (Stream *)readyStreams.qHead;
+		if (Dequeue(readyStreams.qHead, &readyStreams) != noErr) {
+			// race condition: this shouldn't happen
+			continue;
+		}
 		// tell the stream to handle its completed operations
 		stream->provider->poll(stream, stream->providerData);
-		next = stream->nextReady;
-		stream->nextReady = NULL;
+		stream->q.qData[0] = 0;
 	}
-	readyStreamsHead = NULL;
-	readyStreamsTail = NULL;
 }
