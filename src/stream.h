@@ -1,8 +1,6 @@
 #ifndef _STREAM_H
 #define _STREAM_H
 
-#include <stdbool.h>
-
 typedef struct Stream Stream;
 typedef struct StreamConsumer StreamConsumer;
 typedef struct StreamProvider StreamProvider;

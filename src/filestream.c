@@ -47,7 +47,7 @@ MyParamBlock *NewPB(FileData *fileData)
 }
 
 // provide a file to a stream for read/write
-void ProvideFileStream(Stream *s, char *fileName, short vRefNum)
+void ProvideFileStream(Stream *s, StringPtr fileName, short vRefNum)
 {
 	if (!s) return;
 	FileData *fileData = malloc(sizeof(FileData));
@@ -68,10 +68,8 @@ void FileStreamOpen(Stream *s, void *providerData)
 	FileData *fileData = (FileData *)providerData;
 
 	ParmBlkPtr pb = (ParmBlkPtr)NewPB(fileData);
-	printf("open. addr: %p, fileData: %p\n", pb, ((MyParamBlock *)pb)->fileData);
-	printf("opened fileName: %s\n", ((MyParamBlock *)pb)->fileData->fileName+1);
 	if (!pb) {
-		// error
+		StreamErrored(s, fileStreamErr);
 		return;
 	}
 
@@ -81,7 +79,6 @@ void FileStreamOpen(Stream *s, void *providerData)
 	pb->ioParam.ioPermssn = fsRdPerm;
 	pb->ioParam.ioMisc = 0;
 	PBOpenAsync(pb);
-	printf("open done. result: %d\n", pb->ioParam.ioResult);
 }
 
 void FileStreamClose(Stream *s, void *providerData)
@@ -89,7 +86,7 @@ void FileStreamClose(Stream *s, void *providerData)
 	FileData *fileData = (FileData *)providerData;
 	ParmBlkPtr pb = (ParmBlkPtr)NewPB(fileData);
 	if (!pb) {
-		// error
+		StreamErrored(s, fileStreamErr);
 		return;
 	}
 	pb->ioParam.ioRefNum = fileData->refNum;
@@ -140,10 +137,10 @@ void FileStreamCompleted(Stream *s, MyParamBlock *pb)
 	switch (trap) {
 		case 0xA400: // Open
 			fileData->refNum = pb->ioParam.ioRefNum;
-			printf("open completed: %hd. refnum: %u\n", oe, fileData->refNum);
 			// check for error
 			if (oe == noErr) {
 				// start reading
+				StreamOpened(s);
 				FileStreamRead(fileData, pb);
 			} else {
 				// notify about error
@@ -152,16 +149,15 @@ void FileStreamCompleted(Stream *s, MyParamBlock *pb)
 			}
 			break;
 		case 0xA401: // Close
-			printf("close completed\n");
 			if (oe == noErr) {
 				StreamClosed(s);
 			} else {
 				StreamErrored(s, oe);
 			}
 			free(pb);
+			free(fileData);
 			break;
 		case 0xA403: // Write
-			printf("write completed\n");
 			// check ioActCount, ioPosOffset, ioResult
 			break;
 		case 0xA402: // Read
@@ -188,7 +184,7 @@ void FileStreamCompleted(Stream *s, MyParamBlock *pb)
 		case 0xA405: // Status
 		case 0xA406: // KillIO
 		default: {
-			printf("unhandled operation\n");
+			//printf("unhandled operation\n");
 		}
 	}
 }
