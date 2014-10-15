@@ -2,24 +2,26 @@
 #include <stdio.h>
 #include <Files.h>
 #include <Devices.h>
+#include <OSUtils.h>
+#include <stdbool.h>
 #include "stream.h"
 #include "filestream.h"
 
 typedef struct MyParamBlock MyParamBlock;
 
 typedef struct {
+	QHdr completedPBs;
 	char *fileName;
 	short vRefNum;
 	short refNum;
-	char readBuf[256];
+	char readBuf[1024];
 	Stream *stream;
-	MyParamBlock *completedPBsHead;
-	MyParamBlock *completedPBsTail;
 } FileData;
 
 struct MyParamBlock {
 	IOParam ioParam;
 	FileData *fileData;
+	bool inQueue;
 };
 
 void FileStreamOpen(Stream *s, void *providerData);
@@ -42,6 +44,7 @@ MyParamBlock *NewPB(FileData *fileData)
 	MyParamBlock *pb = malloc(sizeof(MyParamBlock));
 	if (!pb) return NULL;
 	pb->fileData = fileData;
+	pb->inQueue = false;
 	pb->ioParam.ioCompletion = FileStreamComplete;
 	return pb;
 }
@@ -58,8 +61,8 @@ void ProvideFileStream(Stream *s, StringPtr fileName, short vRefNum)
 	fileData->fileName = fileName;
 	fileData->vRefNum = vRefNum;
 	fileData->stream = s;
-	fileData->completedPBsTail = NULL;
-	fileData->completedPBsHead = NULL;
+	fileData->completedPBs.qHead = NULL;
+	fileData->completedPBs.qTail = NULL;
 	StreamProvide(s, &fileStreamProvider, fileData);
 }
 
@@ -198,13 +201,13 @@ void FileStreamComplete(MyParamBlock *pb)
 	FileData *fileData = pb->fileData;
 	// Put the PB on our queue of completed operations.
 	// Then we can retrieve it in FileStreamPoll.
-	// Make use of the linked-list pointer which is not used after completion.
-	if (fileData->completedPBsTail) {
-		fileData->completedPBsTail->ioParam.qLink = (QElemPtr)pb;
-	} else {
-		fileData->completedPBsHead = pb;
+
+	if (pb->inQueue) {
+		// skip if already enqueued
+		return;
 	}
-	fileData->completedPBsTail = pb;
+	pb->inQueue = true;
+	Enqueue((QElemPtr)pb, &fileData->completedPBs);
 
 	// notify the stream manager that we have data to poll for
 	StreamWait(pb->fileData->stream);
@@ -214,12 +217,16 @@ void FileStreamComplete(MyParamBlock *pb)
 void FileStreamPoll(Stream *stream, void *providerData)
 {
 	FileData *fileData = (FileData *)providerData;
-	MyParamBlock *pb, *pbNext;
+	QHdr *q = &fileData->completedPBs;
+	MyParamBlock *pb;
 	// Handle each completed operation
-	for (pb = fileData->completedPBsHead; pb; pb = pbNext) {
+	while (fileData->completedPBs.qHead) {
+		pb = (MyParamBlock *)q->qHead;
+		if (Dequeue((QElemPtr)pb, q) != noErr) {
+			// race condition avoided
+			continue;
+		}
+		pb->inQueue = false;
 		FileStreamCompleted(stream, pb);
-		pbNext = (MyParamBlock *)pb->ioParam.qLink;
 	}
-	fileData->completedPBsHead = NULL;
-	fileData->completedPBsTail = NULL;
 }

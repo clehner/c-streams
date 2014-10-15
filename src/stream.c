@@ -5,7 +5,8 @@
 
 // stream object: a connection between a consumer and provider of data
 struct Stream {
-	QElem q;
+	QElemPtr qLink;
+	short qType; // use as boolean for whether the stream is in the queue
 	StreamConsumer *consumer;
 	void *consumerData;
 	StreamProvider *provider;
@@ -89,27 +90,27 @@ void StreamEnded(Stream *stream)
 // May be called in interrupt.
 void StreamWait(Stream *stream)
 {
-	if (stream->q.qData[0]) {
+	if (stream->qType) {
 		// already in the queue
 		return;
 	}
 	// add the stream to the queue
-	stream->q.qData[0] = 1;
-	Enqueue((QElem *)stream, &readyStreams);
+	stream->qType = true;
+	Enqueue((QElemPtr)stream, &readyStreams);
 }
 
 void PollStreams()
 {
 	Stream *stream;
-	// Handle each ready operation, popping them off the queue
+	// Handle each ready operation, popping them off the ready queue
 	while (readyStreams.qHead) {
 		stream = (Stream *)readyStreams.qHead;
 		if (Dequeue(readyStreams.qHead, &readyStreams) != noErr) {
-			// race condition: this shouldn't happen
+			// race condition avoided
 			continue;
 		}
 		// tell the stream to handle its completed operations
 		stream->provider->poll(stream, stream->providerData);
-		stream->q.qData[0] = 0;
+		stream->qType = false;
 	}
 }
