@@ -14,13 +14,12 @@
 typedef struct MyTCPiopb MyTCPiopb;
 
 typedef struct {
+	QHdr completedPBs;
 	Stream *stream;
 	StreamPtr tcpStream;
 	char recvBuf[8192];
 	ip_addr remoteHost;
 	tcp_port remotePort;
-	MyTCPiopb *completedPBsHead;
-	MyTCPiopb *completedPBsTail;
 	bool hasDataArrived;
 	bool isRecvInProgress;
 	rdsEntry rds[32];
@@ -29,7 +28,6 @@ typedef struct {
 struct MyTCPiopb {
 	TCPiopb pb;
 	TCPData *tcpData;
-	struct MyTCPiopb *nextCompleted;
 };
 
 TCPData *NewTCPData(Stream *s);
@@ -132,8 +130,8 @@ TCPData *NewTCPData(Stream *s)
 		return NULL;
 	}
 	tcpData->stream = s;
-	tcpData->completedPBsTail = NULL;
-	tcpData->completedPBsHead = NULL;
+	tcpData->completedPBs.qHead = NULL;
+	tcpData->completedPBs.qTail = NULL;
 	tcpData->isRecvInProgress = false;
 	tcpData->hasDataArrived = false;
 	TCPiopb *pb = NewTCPPB(tcpData);
@@ -307,15 +305,18 @@ void TCPStreamRelease(Stream *stream,  TCPData *tcpData)
 void TCPStreamPoll(Stream *stream, void *providerData)
 {
 	TCPData *tcpData = (TCPData *)providerData;
-	MyTCPiopb *pb, *pbNext;
+	QHdr *q = &tcpData->completedPBs;
+	MyTCPiopb *pb;
 
 	// Handle each completed operation
-	for (pb = tcpData->completedPBsHead; pb; pb = pbNext) {
+	while (tcpData->completedPBs.qHead) {
+		pb = (MyTCPiopb *)q->qHead;
+		if (Dequeue((QElemPtr)pb, q) != noErr) {
+			// race condition avoided
+			continue;
+		}
 		TCPStreamCompleted(stream, pb);
-		pbNext = (MyTCPiopb *)pb->nextCompleted;
 	}
-	tcpData->completedPBsHead = NULL;
-	tcpData->completedPBsTail = NULL;
 
 	// Receive data that may have arrived
 	if (tcpData->hasDataArrived) {
@@ -485,13 +486,7 @@ void TCPIOComplete(TCPiopb *thePB)
 	TCPData *tcpData = pb->tcpData;
 	// Put the PB on our queue of completed operations.
 	// Then we can retrieve it in TCPStreamPoll.
-	// Make use of the linked-list pointer which is not used after completion.
-	if (tcpData->completedPBsTail) {
-		tcpData->completedPBsTail->nextCompleted = pb;
-	} else {
-		tcpData->completedPBsHead = pb;
-	}
-	tcpData->completedPBsTail = pb;
+	Enqueue((QElemPtr)pb, &tcpData->completedPBs);
 
 	// notify the stream manager that we have data to poll for
 	StreamWait(pb->tcpData->stream);
