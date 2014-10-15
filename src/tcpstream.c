@@ -78,7 +78,7 @@ const char *sprint_ip_addr(ip_addr ip)
 TCPiopb *NewTCPPB(TCPData *tcpData)
 {
 	Stream *stream = tcpData->stream;
-	if (!stream || !tcpData->tcpStream) {
+	if (!stream) {
 		StreamErrored(stream, tcpMissingStreamErr);
 		return NULL;
 	}
