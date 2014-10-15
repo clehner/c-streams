@@ -68,6 +68,7 @@ int main()
 {
 	printf("Press 's' to open a socket, 'o' to open a file\n");
 	printf("Press other characters to write them to the socket.\n");
+	InitStreams();
 	//OpenASocket();
 	//OpenAFile();
 	while (HandleEvent()) {

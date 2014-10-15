@@ -22,6 +22,7 @@ struct StreamProvider {
 	void (*poll)(Stream *s, void *providerData);
 };
 
+void InitStreams();
 void PollStreams();
 
 Stream *NewStream();

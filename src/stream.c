@@ -1,4 +1,6 @@
 #include <OSUtils.h>
+#include <Processes.h>
+#include <Traps.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include "stream.h"
@@ -13,7 +15,20 @@ struct Stream {
 	void *providerData;
 };
 
+bool hasPSN = false;
+ProcessSerialNumber psn = {0};
+
 QHdr readyStreams = {0};
+
+void InitStreams()
+{
+	if (GetTrapAddress(0xA88F) != GetTrapAddress(_Unimplemented)) {
+		GetCurrentProcess(&psn);
+		if (psn.highLongOfPSN || psn.lowLongOfPSN) {
+			hasPSN = true;
+		}
+	}
+}
 
 // create a new stream object
 Stream *NewStream()
@@ -97,6 +112,11 @@ void StreamWait(Stream *stream)
 	// add the stream to the queue
 	stream->qType = true;
 	Enqueue((QElemPtr)stream, &readyStreams);
+
+	// trigger our event loop to take control
+	if (hasPSN) {
+		WakeUpProcess(&psn);
+	}
 }
 
 void PollStreams()
