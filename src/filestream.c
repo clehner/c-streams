@@ -122,7 +122,8 @@ void FileStreamRead(FileData *fileData, MyParamBlock *pb)
 	pb->ioParam.ioBuffer = fileData->readBuf;
 	pb->ioParam.ioReqCount = sizeof fileData->readBuf;
 	//pb->ioParam.ioPosMode = 0x0D80; // one line at a time from current mark
-	pb->ioParam.ioPosOffset = fsAtMark;
+	pb->ioParam.ioPosMode = fsAtMark;
+	pb->ioParam.ioPosOffset = 0;
 	PBReadAsync((ParmBlkPtr)pb);
 }
 
