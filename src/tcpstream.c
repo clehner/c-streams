@@ -17,7 +17,7 @@ typedef struct {
 	QHdr completedPBs;
 	Stream *stream;
 	StreamPtr tcpStream;
-	char recvBuf[8192];
+	char recvBuf[4096];
 	ip_addr remoteHost;
 	tcp_port remotePort;
 	rdsEntry rds[32];
@@ -74,11 +74,7 @@ const char *sprint_ip_addr(ip_addr ip)
 TCPiopb *NewTCPPB(TCPData *tcpData, short csCode)
 {
 	Stream *stream = tcpData->stream;
-	if (!stream) {
-		StreamErrored(stream, tcpMissingStreamErr);
-		return NULL;
-	}
-	if (!tcpData->tcpStream) {
+	if (!stream || !tcpData->tcpStream) {
 		StreamErrored(stream, tcpMissingStreamErr);
 		return NULL;
 	}
@@ -147,15 +143,17 @@ TCPData *NewTCPData(Stream *s)
 			StreamErrored(s, tcpStreamLimitErr);
 			return NULL;
 		case streamAlreadyOpen:
-		case connectionExists:
-			// FIXME
 			StreamErrored(s, -10);
 			return NULL;
-		case invalidLength:
+		case connectionExists:
+			// FIXME
 			StreamErrored(s, -11);
 			return NULL;
-		case invalidBufPtr:
+		case invalidLength:
 			StreamErrored(s, -12);
+			return NULL;
+		case invalidBufPtr:
+			StreamErrored(s, -13);
 			return NULL;
 		default:
 			StreamErrored(s, pb.ioResult);
@@ -166,18 +164,13 @@ TCPData *NewTCPData(Stream *s)
 	tcpData->tcpStream = pb.tcpStream;
 	tcpData->completedPBs.qHead = NULL;
 	tcpData->completedPBs.qTail = NULL;
-	//tcpData->isRecvInProgress = false;
-	//tcpData->hasDataArrived = false;
 	return tcpData;
 }
 
 void TCPStreamOpen(Stream *stream, void *providerData)
 {
 	TCPData *tcpData = (TCPData *)providerData;
-	if (!tcpData) {
-		StreamErrored(stream, tcpMissingStreamErr);
-		return;
-	}
+	if (!tcpData) return;
 	TCPiopb *pb = NewTCPPB(tcpData, TCPActiveOpen);
 	if (!pb) return;
 
@@ -197,8 +190,8 @@ void TCPStreamOpen(Stream *stream, void *providerData)
 void TCPStreamClose(Stream *stream, void *providerData)
 {
 	TCPData *tcpData = (TCPData *)providerData;
-	if (!tcpData) {
-		StreamErrored(stream, tcpMissingStreamErr);
+	if (!tcpData || !tcpData->tcpStream) {
+		// don't send an error on duplicate close
 		return;
 	}
 	TCPiopb *pb = NewTCPPB(tcpData, TCPClose);
@@ -274,35 +267,32 @@ void TCPStreamReceive(TCPData *tcpData, MyTCPiopb *pb)
 void TCPStreamClosed(TCPData *tcpData)
 {
 	StreamClosed(tcpData->stream);
-	TCPStreamRelease(tcpData->stream, tcpData);
+	if (tcpData->tcpStream) {
+		TCPStreamRelease(tcpData->stream, tcpData);
+	}
 }
 
 // release the TCP stream and free the memory
 //void TCPStreamFree(Stream *stream, void *providerData)
-void TCPStreamRelease(Stream *stream,  TCPData *tcpData)
+void TCPStreamRelease(Stream *stream, TCPData *tcpData)
 {
 	TCPiopb pb;
 	pb.csCode = TCPRelease;
 	pb.tcpStream = tcpData->tcpStream;
 	pb.ioCompletion = TCPIOComplete;
-	if (!tcpRefNum) {
-		StreamErrored(stream, tcpMissingStreamErr);
-		return;
-	}
 	pb.ioCRefNum = tcpRefNum;
 	switch (PBControlSync((ParmBlkPtr)&pb)) {
 		case invalidStreamPtr:
 			StreamErrored(stream, tcpMissingStreamErr);
 			break;
 		case noErr:
-			// TODO: make sure it doesn't get called again
 			//free(tcpData);
 			break;
 	}
 	tcpData->tcpStream = 0;
 }
 
-// called by Streams Manager (not in interrupt)
+// called by stream.c (not in interrupt)
 // after we requested it with StreamWait
 void TCPStreamPoll(Stream *stream, void *providerData)
 {
@@ -440,7 +430,7 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 					break;
 				case invalidStreamPtr:
 				case connectionDoesntExist:
-					StreamErrored(stream, 10000 + __LINE__);
+					StreamErrored(stream, tcpMissingStreamErr);
 					break;
 				case invalidLength:
 				case invalidBufPtr:
