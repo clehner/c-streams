@@ -20,8 +20,6 @@ typedef struct {
 	char recvBuf[8192];
 	ip_addr remoteHost;
 	tcp_port remotePort;
-	bool hasDataArrived;
-	bool isRecvInProgress;
 	rdsEntry rds[32];
 } TCPData;
 
@@ -261,9 +259,6 @@ void TCPStreamWrite(Stream *s, void *pData, char *data, unsigned short len)
 // get data
 void TCPStreamReceive(TCPData *tcpData)
 {
-	if (tcpData->isRecvInProgress) return;
-	tcpData->isRecvInProgress = true;
-
 	TCPiopb *pb = NewTCPPB(tcpData, TCPNoCopyRcv);
 	if (!pb) return;
 
@@ -323,12 +318,6 @@ void TCPStreamPoll(Stream *stream, void *providerData)
 		}
 		TCPStreamCompleted(stream, pb);
 	}
-
-	// Receive data that may have arrived
-	if (tcpData->hasDataArrived) {
-		TCPStreamReceive(tcpData);
-		tcpData->hasDataArrived = false;
-	}
 }
 
 // handle completed IO operation, not in interrupt
@@ -344,6 +333,8 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 			switch (pb->pb.ioResult) {
 				case noErr:
 					StreamOpened(stream);
+					// Start auto-receive
+					TCPStreamReceive(tcpData);
 					break;
 				case connectionTerminated:
 					StreamErrored(stream, tcpConnectErr);
@@ -355,14 +346,15 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 			free(pb);
 			break;
 		case TCPClose:
+			// let TCPNoCopyRcv completion send the close event
 			switch (pb->pb.ioResult) {
 				case noErr:
 					StreamEnded(stream);
-					TCPStreamClosed(tcpData);
+					//TCPStreamClosed(tcpData);
 					break;
 				case connectionTerminated:
 					StreamErrored(stream, tcpTerminatedErr);
-					TCPStreamClosed(tcpData);
+					//TCPStreamClosed(tcpData);
 					break;
 				case invalidStreamPtr:
 				case connectionDoesntExist:
@@ -415,21 +407,44 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 			free(pb);
 			break;
 		}
-		case TCPNoCopyRcv:
-			tcpData->isRecvInProgress = false;
+		case TCPNoCopyRcv: {
+			// Process the received data
 			rdsEntry *rds = tcpData->rds;
 			for (; rds->length; rds++) {
 				StreamRead(stream, rds->ptr, rds->length);
 			}
-			// return rds bufs
-			pb->pb.csCode = TCPRcvBfrReturn;
-			// reuse pb. rds pointer is already set
-			OSErr oe = PBControlSync((ParmBlkPtr)pb);
-			if (oe != noErr) {
-				StreamErrored(stream, tcpInternalErr);
+
+			switch (pb->pb.ioResult) {
+				case noErr:
+					// Start another receive
+					TCPStreamReceive(tcpData);
+					break;
+				case connectionClosing:
+					// return rds bufs
+					pb->pb.csCode = TCPRcvBfrReturn;
+					// reuse pb. rds pointer is already set
+					OSErr oe = PBControlSync((ParmBlkPtr)pb);
+					if (oe != noErr) {
+						StreamErrored(stream, tcpInternalErr);
+					}
+					free(pb);
+					TCPStreamClosed(tcpData);
+					break;
+				case connectionTerminated:
+					StreamErrored(stream, tcpTerminatedErr);
+					TCPStreamClosed(tcpData);
+					break;
+				case invalidStreamPtr:
+				case connectionDoesntExist:
+					StreamErrored(stream, 10000 + __LINE__);
+					break;
+				case invalidLength:
+				case invalidBufPtr:
+				default:
+					StreamErrored(stream, tcpInternalErr);
 			}
-			free(pb);
 			break;
+		}
 		default:
 			printf("unhandled TCP operation completed\n");
 	}
@@ -470,8 +485,7 @@ pascal void TCPNotifyProc(
 			printf("tcp connection terminated\n");
 		break;
 		case TCPDataArrival:
-			tcpData->hasDataArrived = true;
-			StreamWait(stream);
+			printf("data arrived without recv in progress\n");
 		break;
 		case TCPUrgent:
 		break;
