@@ -34,7 +34,7 @@ void TCPStreamClose(Stream *s, void *providerData);
 void TCPStreamWrite(Stream *s, void *pData, char *data, unsigned short len);
 void TCPStreamPoll(Stream *s, void *providerData);
 
-void TCPStreamReceive(TCPData *tcpData);
+void TCPStreamReceive(TCPData *tcpData, MyTCPiopb *pb);
 void TCPIOComplete(TCPiopb *thePB);
 void TCPStreamCompleted(Stream *s, MyTCPiopb *pb);
 void TCPStreamRelease(Stream *stream,  TCPData *tcpData);
@@ -75,6 +75,10 @@ TCPiopb *NewTCPPB(TCPData *tcpData, short csCode)
 {
 	Stream *stream = tcpData->stream;
 	if (!stream) {
+		StreamErrored(stream, tcpMissingStreamErr);
+		return NULL;
+	}
+	if (!tcpData->tcpStream) {
 		StreamErrored(stream, tcpMissingStreamErr);
 		return NULL;
 	}
@@ -135,7 +139,6 @@ TCPData *NewTCPData(Stream *s)
 	pb.csParam.create.rcvBuff = tcpData->recvBuf;
 	pb.csParam.create.rcvBuffLen = sizeof(tcpData->recvBuf);
 	pb.csParam.create.notifyProc = TCPNotifyProc;
-	pb.csParam.create.userDataPtr = (Ptr)tcpData;
 	PBControlSync((ParmBlkPtr)&pb);
 	switch (pb.ioResult) {
 		case noErr:
@@ -257,12 +260,10 @@ void TCPStreamWrite(Stream *s, void *pData, char *data, unsigned short len)
 }
 
 // get data
-void TCPStreamReceive(TCPData *tcpData)
+void TCPStreamReceive(TCPData *tcpData, MyTCPiopb *pb)
 {
-	TCPiopb *pb = NewTCPPB(tcpData, TCPNoCopyRcv);
-	if (!pb) return;
-
-	TCPReceivePB *receivePb = &pb->csParam.receive;
+	pb->pb.csCode = TCPNoCopyRcv;
+	TCPReceivePB *receivePb = &pb->pb.csParam.receive;
 	//receivePb->secondTimeStamp = 5;
 	receivePb->commandTimeoutValue = 0;
 	receivePb->rdsPtr = (Ptr)tcpData->rds;
@@ -333,17 +334,18 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 			switch (pb->pb.ioResult) {
 				case noErr:
 					StreamOpened(stream);
-					// Start auto-receive
-					TCPStreamReceive(tcpData);
+					// Start auto-receive. Reuse pb.
+					TCPStreamReceive(tcpData, pb);
 					break;
 				case connectionTerminated:
 					StreamErrored(stream, tcpConnectErr);
+					free(pb);
 					break;
 				default:
-					printf("open error: %hd\n", pb->pb.ioResult);
+					alertf("open error: %hd\n", pb->pb.ioResult);
 					StreamErrored(stream, tcpConnectErr);
+					free(pb);
 			}
-			free(pb);
 			break;
 		case TCPClose:
 			// let TCPNoCopyRcv completion send the close event
@@ -392,7 +394,8 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 					break;
 				case connectionTerminated:
 					StreamErrored(stream, tcpTerminatedErr);
-					TCPStreamClosed(tcpData);
+					// let TCPNoCopyRcv completeion send the close event
+					//TCPStreamClosed(tcpData);
 					break;
 				case invalidStreamPtr:
 				case connectionDoesntExist:
@@ -414,21 +417,22 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 				StreamRead(stream, rds->ptr, rds->length);
 			}
 
+			// return rds bufs
+			pb->pb.csCode = TCPRcvBfrReturn;
+			// reuse pb. rds pointer is already set
+			OSErr oe = PBControlSync((ParmBlkPtr)pb);
+			if (oe != noErr) {
+				StreamErrored(stream, tcpInternalErr);
+			}
+
 			switch (pb->pb.ioResult) {
 				case noErr:
 					// Start another receive
-					TCPStreamReceive(tcpData);
+					TCPStreamReceive(tcpData, pb);
 					break;
 				case connectionClosing:
-					// return rds bufs
-					pb->pb.csCode = TCPRcvBfrReturn;
-					// reuse pb. rds pointer is already set
-					OSErr oe = PBControlSync((ParmBlkPtr)pb);
-					if (oe != noErr) {
-						StreamErrored(stream, tcpInternalErr);
-					}
-					free(pb);
 					TCPStreamClosed(tcpData);
+					free(pb);
 					break;
 				case connectionTerminated:
 					StreamErrored(stream, tcpTerminatedErr);
