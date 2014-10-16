@@ -73,7 +73,7 @@ const char *sprint_ip_addr(ip_addr ip)
 // make a tcp param block
 // on success, returns pointer to param block
 // on failure, returns NULL and and sends on error
-TCPiopb *NewTCPPB(TCPData *tcpData)
+TCPiopb *NewTCPPB(TCPData *tcpData, short csCode)
 {
 	Stream *stream = tcpData->stream;
 	if (!stream) {
@@ -86,21 +86,9 @@ TCPiopb *NewTCPPB(TCPData *tcpData)
 		return NULL;
 	}
 	pb->tcpData = tcpData;
+	pb->pb.csCode = csCode;
 	pb->pb.tcpStream = tcpData->tcpStream;
 	pb->pb.ioCompletion = TCPIOComplete;
-	if (!tcpRefNum) {
-		// open the MacTCP driver
-		OSErr err = OpenDriver("\p.IPP", &tcpRefNum);
-		if (err != noErr) {
-			if (err == fnfErr) {
-				StreamErrored(stream, tcpMissingDriverErr);
-			} else {
-				StreamErrored(stream, tcpSetupErr);
-			}
-			free(pb);
-			return NULL;
-		}
-	}
 	pb->pb.ioCRefNum = tcpRefNum;
 	return (TCPiopb *)pb;
 }
@@ -124,39 +112,62 @@ void ProvideTCPActiveStream(Stream *s, ip_addr ip, tcp_port port)
 // on failure, returns null and sends error
 TCPData *NewTCPData(Stream *s)
 {
+	TCPiopb pb;
 	TCPData *tcpData = malloc(sizeof(TCPData));
 	if (!tcpData) {
 		StreamErrored(s, tcpOutOfMemoryErr);
 		return NULL;
 	}
-	tcpData->stream = s;
-	tcpData->completedPBs.qHead = NULL;
-	tcpData->completedPBs.qTail = NULL;
-	tcpData->isRecvInProgress = false;
-	tcpData->hasDataArrived = false;
-	TCPiopb *pb = NewTCPPB(tcpData);
-	if (!pb) {
-		free(tcpData);
-		return NULL;
+
+	if (!tcpRefNum) {
+		// open the MacTCP driver
+		OSErr err = OpenDriver("\p.IPP", &tcpRefNum);
+		if (err != noErr) {
+			if (err == fnfErr) {
+				StreamErrored(s, tcpMissingDriverErr);
+			} else {
+				StreamErrored(s, tcpSetupErr);
+			}
+			return NULL;
+		}
 	}
-	pb->csCode = TCPCreate;
-	pb->csParam.create.rcvBuff = tcpData->recvBuf;
-	pb->csParam.create.rcvBuffLen = sizeof(tcpData->recvBuf);
-	pb->csParam.create.notifyProc = TCPNotifyProc;
-	pb->csParam.create.userDataPtr = (Ptr)tcpData;
-	// we'll do this one synchronously
-	// since it should be pretty quick
-	PBControlSync((ParmBlkPtr)pb);
-	tcpData->tcpStream = pb->tcpStream;
-	switch (pb->ioResult) {
+
+	pb.csCode = TCPCreate;
+	pb.ioCRefNum = tcpRefNum;
+	pb.csParam.create.rcvBuff = tcpData->recvBuf;
+	pb.csParam.create.rcvBuffLen = sizeof(tcpData->recvBuf);
+	pb.csParam.create.notifyProc = TCPNotifyProc;
+	pb.csParam.create.userDataPtr = (Ptr)tcpData;
+	PBControlSync((ParmBlkPtr)&pb);
+	switch (pb.ioResult) {
 		case noErr:
-			return tcpData;
+			break;
 		case insufficientResources:
 			StreamErrored(s, tcpStreamLimitErr);
+			return NULL;
+		case streamAlreadyOpen:
+		case connectionExists:
+			// FIXME
+			StreamErrored(s, -10);
+			return NULL;
+		case invalidLength:
+			StreamErrored(s, -11);
+			return NULL;
+		case invalidBufPtr:
+			StreamErrored(s, -12);
+			return NULL;
 		default:
-			StreamErrored(s, tcpCreateStreamErr);
+			StreamErrored(s, pb.ioResult);
+			return NULL;
 	}
-	return NULL;
+
+	tcpData->stream = s;
+	tcpData->tcpStream = pb.tcpStream;
+	tcpData->completedPBs.qHead = NULL;
+	tcpData->completedPBs.qTail = NULL;
+	//tcpData->isRecvInProgress = false;
+	//tcpData->hasDataArrived = false;
+	return tcpData;
 }
 
 void TCPStreamOpen(Stream *stream, void *providerData)
@@ -166,11 +177,10 @@ void TCPStreamOpen(Stream *stream, void *providerData)
 		StreamErrored(stream, tcpMissingStreamErr);
 		return;
 	}
-	TCPiopb *pb = NewTCPPB(tcpData);
+	TCPiopb *pb = NewTCPPB(tcpData, TCPActiveOpen);
 	if (!pb) return;
 
 	TCPOpenPB *openPb = &pb->csParam.open;
-	pb->csCode = TCPActiveOpen;
 	openPb->remoteHost = tcpData->remoteHost;
 	openPb->remotePort = tcpData->remotePort;
 
@@ -190,11 +200,10 @@ void TCPStreamClose(Stream *stream, void *providerData)
 		StreamErrored(stream, tcpMissingStreamErr);
 		return;
 	}
-	TCPiopb *pb = NewTCPPB(tcpData);
+	TCPiopb *pb = NewTCPPB(tcpData, TCPClose);
 	if (!pb) return;
 
 	TCPClosePB *closePb = &pb->csParam.close;
-	pb->csCode = TCPClose;
 	closePb->ulpTimeoutValue = 30; // seconds without FIN acknowledged
 	closePb->ulpTimeoutAction = 1; // abort on timeout
 	closePb->validityFlags = 0xC0; // timeout value and action are valid
@@ -209,10 +218,9 @@ void TCPStreamAbort(Stream *stream, void *providerData)
 		StreamErrored(stream, tcpMissingStreamErr);
 		return;
 	}
-	TCPiopb *pb = NewTCPPB(tcpData);
+	TCPiopb *pb = NewTCPPB(tcpData, TCPAbort);
 	if (!pb) return;
 
-	pb->csCode = TCPAbort;
 	PBControlAsync((ParmBlkPtr)pb);
 }
 */
@@ -224,10 +232,8 @@ void TCPStreamWrite(Stream *s, void *pData, char *data, unsigned short len)
 		StreamErrored(s, tcpMissingStreamErr);
 		return;
 	}
-	TCPiopb *pb = NewTCPPB(tcpData);
+	TCPiopb *pb = NewTCPPB(tcpData, TCPSend);
 	if (!pb) return;
-
-	pb->csCode = TCPSend;
 
 	// TODO: allow data to be sent without copying
 	// copy the data into a new wds struct
@@ -258,12 +264,12 @@ void TCPStreamReceive(TCPData *tcpData)
 	if (tcpData->isRecvInProgress) return;
 	tcpData->isRecvInProgress = true;
 
-	TCPiopb *pb = NewTCPPB(tcpData);
+	TCPiopb *pb = NewTCPPB(tcpData, TCPNoCopyRcv);
 	if (!pb) return;
 
 	TCPReceivePB *receivePb = &pb->csParam.receive;
-	pb->csCode = TCPNoCopyRcv;
-	receivePb->secondTimeStamp = 5;
+	//receivePb->secondTimeStamp = 5;
+	receivePb->commandTimeoutValue = 0;
 	receivePb->rdsPtr = (Ptr)tcpData->rds;
 	receivePb->rdsLength = ARRAYSIZE(tcpData->rds);
 	PBControlAsync((ParmBlkPtr)pb);
