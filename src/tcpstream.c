@@ -2,6 +2,7 @@
 #include <Devices.h>
 #include <Processes.h>
 #include <MacTCP.h>
+#include <AddressXlation.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -18,9 +19,21 @@ typedef struct {
 	Stream *stream;
 	StreamPtr tcpStream;
 	char recvBuf[4096];
-	ip_addr remoteHost;
-	tcp_port remotePort;
 	rdsEntry rds[32];
+
+	struct {
+		char name[256];
+		ip_addr addr;
+		tcp_port port;
+		struct hostInfo *resolveInfo;
+	} remoteHost;
+
+	enum {
+		notResolved,
+		resolveInProgress,
+		resolveCompleted,
+		resolveFinished
+	} resolveState;
 } TCPData;
 
 struct MyTCPiopb {
@@ -29,20 +42,23 @@ struct MyTCPiopb {
 };
 
 TCPData *NewTCPData(Stream *s);
+void TCPStreamResolve(TCPData *tcpData);
+void TCPStreamResolveCompleted(TCPData *tcpData);
 void TCPStreamOpen(Stream *s, void *providerData);
 void TCPStreamClose(Stream *s, void *providerData);
 void TCPStreamWrite(Stream *s, void *pData, char *data, unsigned short len);
 void TCPStreamPoll(Stream *s, void *providerData);
 
 void TCPStreamReceive(TCPData *tcpData, MyTCPiopb *pb);
-void TCPIOComplete(TCPiopb *thePB);
 void TCPStreamCompleted(Stream *s, MyTCPiopb *pb);
 void TCPStreamRelease(Stream *stream,  TCPData *tcpData);
 void TCPStreamClosed(TCPData *tcpData);
 
+void TCPIOComplete(TCPiopb *thePB);
 pascal void TCPNotifyProc(StreamPtr tcpStream, TCPEventCode eventCode,
 	Ptr userDataPtr, TCPTerminationReason terminReason,
 	struct ICMPReport *icmpMsg);
+pascal void StrToAddrProc(struct hostInfo *hostInfoPtr, char *userDataPtr);
 
 static StreamProvider tcpStreamProvider = {
 	.open = TCPStreamOpen,
@@ -53,6 +69,7 @@ static StreamProvider tcpStreamProvider = {
 
 // id of the open MacTCP driver
 short tcpRefNum;
+bool resolverOpen;
 
 // utility function for printing an IP address.
 // returns a static buffer (expect to be overridden upon next call)
@@ -66,6 +83,82 @@ const char *sprint_ip_addr(ip_addr ip)
 	}
 	addr_str[len-1] = '\0';
 	return addr_str;
+}
+
+// resolve the hostname so that Open may proceed
+void TCPStreamResolve(TCPData *tcpData)
+{
+	OSErr err;
+
+	if (tcpData->resolveState != notResolved) {
+		// already resolving or resolved
+		return;
+	}
+
+	tcpData->resolveState = resolveInProgress;
+	if (!resolverOpen) {
+		if ((err = OpenResolver(NULL))) {
+			alertf("Unable to open DNS resolver: %hu", err);
+			return;
+		}
+		resolverOpen = true;
+	}
+
+	tcpData->remoteHost.resolveInfo = malloc(sizeof(struct hostInfo));
+	if (!tcpData->remoteHost.resolveInfo) {
+		alertf("Out of memory");
+		return;
+	}
+
+	alertf("strtoaddr %s", tcpData->remoteHost.name);
+	err = StrToAddr(tcpData->remoteHost.name,
+			tcpData->remoteHost.resolveInfo,
+			StrToAddrProc, (Ptr)tcpData);
+}
+
+void TCPStreamResolveCompleted(TCPData *tcpData)
+{
+	char *s = NULL;
+	struct hostInfo *resolveInfo = tcpData->remoteHost.resolveInfo;
+	tcpData->resolveState = resolveFinished;
+
+	switch (resolveInfo->rtnCode) {
+		case noErr:
+			return;
+		case nameSyntaxErr:
+			s = "Syntax error in name";
+			break;
+		case noResultProc:
+			s = "No result procedure";
+			break;
+		case noNameServer:
+			s = "No name server found";
+			break;
+		case authNameErr:
+			s = "Host does not exist";
+			break;
+		case noAnsErr:
+			s = "No name servers responding";
+			break;
+		case dnrErr:
+			s = "Name server returned an error";
+			break;
+		case outOfMemory:
+			s = "Not enough memory to resolve name";
+			break;
+		case notOpenErr:
+			s = "Driver not open";
+			break;
+		default:
+			s = "Unknown";
+	}
+	if (s) alertf("Resolver: %s: %.80s", s, tcpData->remoteHost.name);
+	alertf("resolve finished");
+
+	// proceed with opening the stream
+	tcpData->remoteHost.addr = resolveInfo->addr[0];
+	free(resolveInfo);
+	TCPStreamOpen(tcpData->stream, tcpData);
 }
 
 // make a tcp param block
@@ -92,7 +185,7 @@ TCPiopb *NewTCPPB(TCPData *tcpData, short csCode)
 }
 
 // provide a tcp stream
-void ProvideTCPActiveStream(Stream *s, ip_addr ip, tcp_port port)
+void ProvideTCPActiveStream(Stream *s, const char *host, tcp_port port)
 {
 	if (!s) return;
 	TCPData *tcpData = NewTCPData(s);
@@ -101,8 +194,8 @@ void ProvideTCPActiveStream(Stream *s, ip_addr ip, tcp_port port)
 		// NewTCPData will have sent an error
 		return;
 	}
-	tcpData->remoteHost = ip;
-	tcpData->remotePort = port;
+	tcpData->remoteHost.port = port;
+	strncpy(tcpData->remoteHost.name, host, sizeof(tcpData->remoteHost.name));
 }
 
 // make a data object for a tcp stream
@@ -164,6 +257,8 @@ TCPData *NewTCPData(Stream *s)
 	tcpData->tcpStream = pb.tcpStream;
 	tcpData->completedPBs.qHead = NULL;
 	tcpData->completedPBs.qTail = NULL;
+	tcpData->resolveState = notResolved;
+	tcpData->remoteHost.addr = 0;
 	return tcpData;
 }
 
@@ -171,12 +266,19 @@ void TCPStreamOpen(Stream *stream, void *providerData)
 {
 	TCPData *tcpData = (TCPData *)providerData;
 	if (!tcpData) return;
+
+	if (tcpData->resolveState != resolveFinished) {
+		// resolve the host before connecting
+		TCPStreamResolve(tcpData);
+		return;
+	}
+
 	TCPiopb *pb = NewTCPPB(tcpData, TCPActiveOpen);
 	if (!pb) return;
 
 	TCPOpenPB *openPb = &pb->csParam.open;
-	openPb->remoteHost = tcpData->remoteHost;
-	openPb->remotePort = tcpData->remotePort;
+	openPb->remotePort = tcpData->remoteHost.port;
+	openPb->remoteHost = tcpData->remoteHost.addr;
 
 	printf("port: %hu. stream: %p\n", openPb->remotePort, pb->tcpStream);
 	//puts("open stream?\n");
@@ -201,6 +303,7 @@ void TCPStreamClose(Stream *stream, void *providerData)
 	closePb->ulpTimeoutValue = 30; // seconds without FIN acknowledged
 	closePb->ulpTimeoutAction = 1; // abort on timeout
 	closePb->validityFlags = 0xC0; // timeout value and action are valid
+	//tcpData->tcpStream = NULL;
 	PBControlAsync((ParmBlkPtr)pb);
 }
 
@@ -257,7 +360,7 @@ void TCPStreamReceive(TCPData *tcpData, MyTCPiopb *pb)
 {
 	pb->pb.csCode = TCPNoCopyRcv;
 	TCPReceivePB *receivePb = &pb->pb.csParam.receive;
-	//receivePb->secondTimeStamp = 5;
+	receivePb->secondTimeStamp = 0;
 	receivePb->commandTimeoutValue = 0;
 	receivePb->rdsPtr = (Ptr)tcpData->rds;
 	receivePb->rdsLength = ARRAYSIZE(tcpData->rds);
@@ -309,6 +412,11 @@ void TCPStreamPoll(Stream *stream, void *providerData)
 		}
 		TCPStreamCompleted(stream, pb);
 	}
+
+	// Handle completed DNS resolution
+	if (tcpData->resolveState == resolveCompleted) {
+		TCPStreamResolveCompleted(tcpData);
+	}
 }
 
 // handle completed IO operation, not in interrupt
@@ -338,6 +446,7 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 			}
 			break;
 		case TCPClose:
+			//alertf("closing: %hu", pb->pb.ioResult);
 			// let TCPNoCopyRcv completion send the close event
 			switch (pb->pb.ioResult) {
 				case noErr:
@@ -401,6 +510,8 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 			break;
 		}
 		case TCPNoCopyRcv: {
+			short rcvResult = pb->pb.ioResult;
+
 			// Process the received data
 			rdsEntry *rds = tcpData->rds;
 			for (; rds->length; rds++) {
@@ -415,7 +526,7 @@ void TCPStreamCompleted(Stream *stream, MyTCPiopb *pb)
 				StreamErrored(stream, tcpInternalErr);
 			}
 
-			switch (pb->pb.ioResult) {
+			switch (rcvResult) {
 				case noErr:
 					// Start another receive
 					TCPStreamReceive(tcpData, pb);
@@ -504,4 +615,12 @@ void TCPIOComplete(TCPiopb *thePB)
 
 	// notify the stream manager that we have data to poll for
 	StreamWait(pb->tcpData->stream);
+}
+
+pascal void StrToAddrProc(struct hostInfo *hostInfo, char *userData)
+{
+	TCPData *tcpData = (TCPData *)userData;
+	tcpData->resolveState = resolveCompleted;
+	ExitToShell();
+	StreamWait(tcpData->stream);
 }

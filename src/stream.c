@@ -67,6 +67,18 @@ void StreamClose(Stream *stream)
 // Consumer should call this
 void StreamWrite(Stream *stream, char *data, unsigned short len)
 {
+	if (!stream) {
+		alertf("no stream");
+		return;
+	}
+	if (!stream->provider) {
+		alertf("no provider");
+		return;
+	}
+	if (!stream->provider->write) {
+		alertf("provider not handling write");
+		return;
+	}
 	stream->provider->write(stream, stream->providerData, data, len);
 }
 

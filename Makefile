@@ -19,7 +19,7 @@ DEP     = $(SRC:.c=.d)
 SHAREDIR= Shared
 
 LIB     = libcstreams.a
-SRC_LIB = src/stream.c src/filestream.c src/tcpstream.c
+SRC_LIB = src/stream.c src/filestream.c src/tcpstream.c src/dnr.c
 OBJ_LIB = $(SRC_LIB:.c=.o)
 INC_LIB = $(SRC_LIB:.c=.h)
 

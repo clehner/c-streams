@@ -20,7 +20,7 @@ enum {
 
 const char *sprint_ip_addr(ip_addr ip);
 
-void ProvideTCPActiveStream(Stream *s, ip_addr ip, tcp_port port);
+void ProvideTCPActiveStream(Stream *s, const char *host, tcp_port port);
 void ProvideTCPPassiveStream(Stream *s, tcp_port port);
 
 #endif
