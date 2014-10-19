@@ -110,21 +110,27 @@ void TCPStreamResolve(TCPData *tcpData)
 		return;
 	}
 
-	alertf("strtoaddr %s", tcpData->remoteHost.name);
 	err = StrToAddr(tcpData->remoteHost.name,
 			tcpData->remoteHost.resolveInfo,
 			StrToAddrProc, (Ptr)tcpData);
+	if (err == noErr) {
+		// completed already?
+		if (tcpData->resolveState == resolveInProgress) {
+			TCPStreamResolveCompleted(tcpData);
+		}
+	}
 }
 
 void TCPStreamResolveCompleted(TCPData *tcpData)
 {
-	char *s = NULL;
+	char *s;
 	struct hostInfo *resolveInfo = tcpData->remoteHost.resolveInfo;
 	tcpData->resolveState = resolveFinished;
 
 	switch (resolveInfo->rtnCode) {
 		case noErr:
-			return;
+			s = NULL;
+			break;
 		case nameSyntaxErr:
 			s = "Syntax error in name";
 			break;
@@ -153,10 +159,10 @@ void TCPStreamResolveCompleted(TCPData *tcpData)
 			s = "Unknown";
 	}
 	if (s) alertf("Resolver: %s: %.80s", s, tcpData->remoteHost.name);
-	alertf("resolve finished");
 
 	// proceed with opening the stream
 	tcpData->remoteHost.addr = resolveInfo->addr[0];
+	tcpData->remoteHost.resolveInfo = NULL;
 	free(resolveInfo);
 	TCPStreamOpen(tcpData->stream, tcpData);
 }
@@ -621,6 +627,5 @@ pascal void StrToAddrProc(struct hostInfo *hostInfo, char *userData)
 {
 	TCPData *tcpData = (TCPData *)userData;
 	tcpData->resolveState = resolveCompleted;
-	ExitToShell();
 	StreamWait(tcpData->stream);
 }
